@@ -155,8 +155,8 @@ def _capture_frame_cv2(stream_url: str, target_sec: int) -> Optional[np.ndarray]
         if cap.isOpened():
             if target_sec > 0:
                 cap.set(cv2.CAP_PROP_POS_MSEC, target_sec * 1000)
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4_000)
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3_000)
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15_000)
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15_000)
             success, cap_frame = cap.read()
             cap.release()
             if success and cap_frame is not None and cap_frame.shape[0] > 50:
