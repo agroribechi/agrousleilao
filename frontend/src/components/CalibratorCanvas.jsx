@@ -100,7 +100,12 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
         const img = new Image();
         img.onload = () => {
           setFrameData({ image: b64, width: img.width, height: img.height });
-          showToast('Print carregado com sucesso!');
+          const aspectRatio = img.width / img.height;
+          if (Math.abs(aspectRatio - 1.777) > 0.05) {
+             showToast('⚠️ Aviso: O print parece cortado (não é 16:9). Recomendamos usar "Carregar do YouTube" para evitar erros no ao vivo.');
+          } else {
+             showToast('Print carregado com sucesso!');
+          }
         };
         img.src = b64;
       };

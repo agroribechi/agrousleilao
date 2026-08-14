@@ -63,14 +63,14 @@ def _resolve_stream_url(url: str) -> Optional[str]:
     stream_url = None
     try:
         ydl_opts = {
-            'format': 'bestvideo[vcodec!=none]/best[ext=mp4]/best',
+            'format': '136/137/18/best[vcodec!=none]/best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
             'socket_timeout': 15,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'ios', 'mweb', 'web']
+                    'player_client': ['android_vr']
                 }
             },
             'http_headers': {
@@ -80,16 +80,14 @@ def _resolve_stream_url(url: str) -> Optional[str]:
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-
-            if 'formats' in info:
+            stream_url = info.get('url')
+            if not stream_url and 'formats' in info:
                 for fmt in reversed(info.get('formats', [])):
                     u = fmt.get('url', '')
                     vcodec = fmt.get('vcodec', 'none')
                     if u and vcodec and vcodec != 'none':
                         stream_url = u
                         break
-            if not stream_url:
-                stream_url = info.get('url')
 
     except Exception as e:
         print(f"[stream_service] yt-dlp erro: {e}")
@@ -107,21 +105,18 @@ def _resolve_stream_url(url: str) -> Optional[str]:
 
 
 def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarray]:
-    """Captura um frame via ffmpeg subprocess com flags de ultra-baixa latência."""
+    """Captura um frame via ffmpeg subprocess no tempo especificado."""
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
         os.close(tmp_fd)
 
         ffmpeg_cmd = [
             'ffmpeg', '-y',
-            '-probesize', '32000',
-            '-analyzeduration', '0',
-            '-fflags', 'nobuffer',
-            '-flags', 'low_delay',
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             '-ss', str(target_sec),
             '-i', stream_url,
             '-frames:v', '1',
-            '-q:v', '3',
+            '-q:v', '2',
             tmp_path
         ]
 
@@ -132,13 +127,15 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarr
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
-            timeout=10,
+            timeout=20,
             **kwargs
         )
 
         frame = None
         if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 2_000:
             frame = cv2.imread(tmp_path)
+        else:
+            print(f"[stream_service] ffmpeg falhou. Stderr: {result.stderr.decode('utf-8', errors='ignore')}")
 
         try:
             os.unlink(tmp_path)
@@ -146,14 +143,8 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarr
             pass
 
         return frame
-
-    except subprocess.TimeoutExpired:
-        print("[stream_service] ffmpeg timeout ao capturar frame")
-    except FileNotFoundError:
-        print("[stream_service] ffmpeg não encontrado no PATH")
     except Exception as e:
-        print(f"[stream_service] ffmpeg subprocess erro: {e}")
-    
+        print(f"[stream_service] ffmpeg erro fatal: {e}")
     return None
 
 
