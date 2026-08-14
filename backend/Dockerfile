@@ -1,13 +1,14 @@
 FROM python:3.11-slim
 
-# Instala ffmpeg e dependências nativas do OpenCV/EasyOCR
+# Instala ffmpeg e dependências nativas do OpenCV/EasyOCR (compatíveis com Debian 12)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender1 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
