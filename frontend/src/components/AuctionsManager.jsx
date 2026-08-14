@@ -338,11 +338,9 @@ export default function AuctionsManager({ API_BASE, user, onViewAuctionPage, tem
               style={{ paddingLeft: '2.2rem', width: '220px', fontSize: '0.85rem' }}
             />
           </div>
-          {isAdmin && (
-            <button onClick={openCreateModal} className="btn-gradient">
-              <Plus size={18} /> Cadastrar Novo Leilão
-            </button>
-          )}
+          <button onClick={openCreateModal} className="btn-gradient">
+            <Plus size={18} /> Cadastrar Novo Leilão
+          </button>
         </div>
       </div>
 

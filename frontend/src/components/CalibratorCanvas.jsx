@@ -67,19 +67,23 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
 
   // Busca imagem do YouTube
   const handleFetchFrame = async () => {
+    if (!url || !url.trim()) {
+      alert('Por favor, informe a URL ou ID do vídeo do YouTube.');
+      return;
+    }
     setLoadingFrame(true);
     setOcrResults(null);
     try {
       const res = await fetch(`${API_BASE}/api/stream/frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, minutes: Number(minutes), seconds: Number(seconds) })
+        body: JSON.stringify({ url: url.trim(), minutes: Number(minutes), seconds: Number(seconds) })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro ao carregar frame.');
+      if (!res.ok) throw new Error(data.detail || 'Erro ao carregar frame do YouTube.');
 
       setFrameData(data);
-      showToast('Frame do YouTube carregado com sucesso!');
+      showToast('Frame do vídeo carregado com sucesso!');
     } catch (err) {
       alert(`Erro: ${err.message}`);
     } finally {

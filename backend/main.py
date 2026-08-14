@@ -258,18 +258,25 @@ def sync_user(user_data: SyncUserRequest, db: Session = Depends(get_db)):
         (models.User.email == user_data.email)
     ).first()
 
+    # Se não existe nenhum admin no sistema, promove o usuário atual a admin
+    admin_count = db.query(models.User).filter(models.User.role == "admin").count()
+
     if existing_user:
-        # Se já existe, apenas atualizamos o UID caso seja uma conta migrada
+        # Se já existe, atualizamos o UID se necessário e promovemos a admin se for o único/primeiro usuário
         if not existing_user.supabase_uid:
             existing_user.supabase_uid = user_data.supabase_uid
-            db.commit()
+        if admin_count == 0:
+            existing_user.role = "admin"
+        db.commit()
+        db.refresh(existing_user)
         return {"status": "already_synced", "user": {"id": existing_user.id, "email": existing_user.email, "role": existing_user.role, "full_name": existing_user.full_name}}
 
+    initial_role = "admin" if admin_count == 0 else "user"
     new_user = models.User(
         supabase_uid=user_data.supabase_uid,
         email=user_data.email,
         full_name=user_data.full_name,
-        role="user"
+        role=initial_role
     )
     db.add(new_user)
     db.commit()
@@ -299,9 +306,11 @@ def require_admin(current_user: models.User = Depends(get_current_user)):
 def create_auction(
     data: AuctionCreate, 
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(require_admin)
+    current_user: models.User = Depends(get_current_user)
 ):
     new_auction = models.Auction(**data.model_dump())
+    if current_user.role != "admin":
+        new_auction.allowed_users.append(current_user)
     db.add(new_auction)
     db.commit()
     db.refresh(new_auction)

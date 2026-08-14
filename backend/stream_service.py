@@ -40,7 +40,7 @@ _CACHE_TTL_SEC = 600  # Cache válido por 10 minutos
 
 def _extract_video_id(url: str) -> str:
     """Extrai o ID do vídeo da URL do YouTube."""
-    match = re.search(r'(?:v=|/live/|/embed/|youtu\.be/|/v/)([^#\&\?]{11})', url)
+    match = re.search(r'(?:v=|/live/|/embed/|youtu\.be/|/v/|/shorts/)([^#\&\?]{11})', url)
     if match:
         return match.group(1)
     if len(url.strip()) == 11:
@@ -63,11 +63,20 @@ def _resolve_stream_url(url: str) -> Optional[str]:
     stream_url = None
     try:
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4][vcodec!=none]/best[ext=mp4]/best',
+            'format': 'bestvideo[vcodec!=none]/best[ext=mp4]/best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'socket_timeout': 12,
+            'socket_timeout': 15,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'mweb', 'web']
+                }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            }
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -76,8 +85,7 @@ def _resolve_stream_url(url: str) -> Optional[str]:
                 for fmt in reversed(info.get('formats', [])):
                     u = fmt.get('url', '')
                     vcodec = fmt.get('vcodec', 'none')
-                    ext = fmt.get('ext', '')
-                    if u and vcodec and vcodec != 'none' and ext in ('mp4', 'webm', ''):
+                    if u and vcodec and vcodec != 'none':
                         stream_url = u
                         break
             if not stream_url:
@@ -117,12 +125,15 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarr
             tmp_path
         ]
 
-        no_window = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        kwargs = {}
+        if os.name == 'nt':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
-            timeout=6,
-            creationflags=no_window
+            timeout=10,
+            **kwargs
         )
 
         frame = None
@@ -211,8 +222,9 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
                         if frame is None:
                             frame = _capture_frame_cv2(stream_url, target_sec)
 
-    # --- Estratégia 2 (Fallback): Thumbnail público ---
-    if frame is None and video_id and target_sec == 0:
+    # --- Estratégia 2 (Fallback Resiliente): Thumbnail público em HD ---
+    if frame is None and video_id:
+        print(f"[stream_service] Tentando fallback de thumbnail pública para video_id={video_id}")
         thumb_sizes = [
             f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
             f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
@@ -221,15 +233,16 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
         ]
         for thumb_url in thumb_sizes:
             try:
-                req = urllib.request.urlopen(thumb_url, timeout=3)
+                req = urllib.request.urlopen(thumb_url, timeout=5)
                 img_bytes = req.read()
                 if len(img_bytes) > 10_000:
                     img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
                     if img is not None and img.shape[0] >= 200 and img.shape[1] >= 200:
                         frame = img
+                        print(f"[stream_service] Thumbnail carregada com sucesso de {thumb_url}")
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[stream_service] Falha ao baixar thumbnail {thumb_url}: {e}")
 
     if frame is None:
         return (

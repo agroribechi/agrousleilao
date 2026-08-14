@@ -13,7 +13,12 @@ import AuctionDetailPage from './components/AuctionDetailPage';
 import ClientAuctionsHome from './components/ClientAuctionsHome';
 import ClientAccessManager from './components/ClientAccessManager';
 
-const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`;
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
+  const protocol = window.location.protocol;
+  return `${protocol}//${window.location.hostname}:8000`;
+};
+const API_BASE = getApiBase();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home'); // 'home', 'live', 'dashboard', 'auctions', 'clients', 'calibrator', 'templates', 'auction_detail'
