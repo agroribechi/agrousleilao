@@ -63,7 +63,7 @@ def _resolve_stream_url(url: str) -> Optional[str]:
     stream_url = None
     try:
         ydl_opts = {
-            'format': '136/137/18/best[vcodec!=none]/best',
+            'format': '22/18/136/137/best[vcodec!=none]/best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
