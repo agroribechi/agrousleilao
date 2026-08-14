@@ -7,10 +7,11 @@ RUN npm ci
 
 COPY . .
 
-# Variáveis injetadas no build via Build Args
-ARG VITE_API_BASE
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
+# Argumentos com valores padrão para build (elimina necessidade de configurar no EasyPanel)
+ARG VITE_API_BASE=""
+ARG VITE_SUPABASE_URL="https://nnxpeitozjsgdbjzvbxt.supabase.co"
+ARG VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ueHBlaXRvempzZ2Rianp2Ynh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzODcwNjgsImV4cCI6MjEwMTk2MzA2OH0.jptsAMPv2mRXL_PIZtCXvAH3MTTeWD_OrKXkKGAKBls"
+
 ENV VITE_API_BASE=$VITE_API_BASE
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
 ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
