@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Save, Trash2, Undo, Play, Sparkles, AlertCircle, CheckCircle, Tag, FolderOpen } from 'lucide-react';
+import { Camera, Save, Trash2, Undo, Play, Sparkles, AlertCircle, CheckCircle, Tag, FolderOpen, Scissors, Monitor } from 'lucide-react';
+import ReactCrop from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 
 export default function CalibratorCanvas({ API_BASE, user, templates = [], initialTemplate = null, onTemplateSaved }) {
   const [url, setUrl] = useState('https://www.youtube.com/watch?v=fHg377zdhms');
@@ -19,6 +21,13 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
   const [ocrResults, setOcrResults] = useState(null);
   const [testingOcr, setTestingOcr] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+
+  // States para o Crop & Screen Capture
+  const [showPlayer, setShowPlayer] = useState(false);
+  const [capturedRawImage, setCapturedRawImage] = useState(null);
+  const [crop, setCrop] = useState();
+  const [completedCrop, setCompletedCrop] = useState(null);
+  const rawImgRef = useRef(null);
 
   const containerRef = useRef(null);
   const imgRef = useRef(null);
@@ -65,30 +74,81 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     }
   };
 
-  // Busca imagem do YouTube
-  const handleFetchFrame = async () => {
+  // Abre o Player do YouTube
+  const handleOpenPlayer = () => {
     if (!url || !url.trim()) {
       alert('Por favor, informe a URL ou ID do vídeo do YouTube.');
       return;
     }
-    setLoadingFrame(true);
-    setOcrResults(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/stream/frame`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), minutes: Number(minutes), seconds: Number(seconds) })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro ao carregar frame do YouTube.');
+    setShowPlayer(true);
+  };
 
-      setFrameData(data);
-      showToast('Frame do vídeo carregado com sucesso!');
+  // Captura a Tela
+  const handleStartCapture = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "browser" }, audio: false });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.play();
+
+      video.onloadedmetadata = () => {
+        setTimeout(() => {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          const base64 = canvas.toDataURL('image/jpeg', 0.9);
+          setCapturedRawImage(base64);
+          
+          stream.getTracks().forEach(t => t.stop());
+          setShowPlayer(false);
+          showToast('Tela capturada! Agora recorte APENAS a área de vídeo limpa.');
+        }, 500);
+      };
     } catch (err) {
-      alert(`Erro: ${err.message}`);
-    } finally {
-      setLoadingFrame(false);
+      if (err.name !== "NotAllowedError") {
+        alert(`Erro ao capturar tela: ${err.message}`);
+      }
     }
+  };
+
+  // Confirma o Crop e salva como frameData
+  const handleConfirmCrop = () => {
+    if (!completedCrop || !completedCrop.width || !completedCrop.height || !rawImgRef.current) {
+      alert("Por favor, arraste para selecionar a área de recorte antes de confirmar.");
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    const scaleX = rawImgRef.current.naturalWidth / rawImgRef.current.width;
+    const scaleY = rawImgRef.current.naturalHeight / rawImgRef.current.height;
+    
+    // Calcula o tamanho real do crop na imagem original
+    const cropWidth = completedCrop.width * scaleX;
+    const cropHeight = completedCrop.height * scaleY;
+    
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.drawImage(
+      rawImgRef.current,
+      completedCrop.x * scaleX,
+      completedCrop.y * scaleY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      cropWidth,
+      cropHeight
+    );
+
+    const croppedBase64 = canvas.toDataURL('image/jpeg', 0.9);
+    setFrameData({ image: croppedBase64, width: Math.round(cropWidth), height: Math.round(cropHeight) });
+    setCapturedRawImage(null);
+    setCrop(undefined);
+    showToast('Recorte salvo com sucesso! Agora desenhe os campos.');
   };
 
   const handleFileUploadCalibrator = (e) => {
@@ -372,19 +432,101 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
               value={seconds} onChange={(e) => setSeconds(e.target.value)}
             />
           </div>
-          <button onClick={handleFetchFrame} disabled={loadingFrame} className="btn-gradient">
-            {loadingFrame ? 'Buscando...' : 'Carregar do YouTube'}
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+          <button 
+            onClick={handleOpenPlayer} 
+            disabled={loadingFrame} 
+            className="btn-gradient" 
+            style={{ flex: 1 }}
+          >
+            {loadingFrame ? 'Carregando...' : <><Play size={18} /> Tocar Vídeo no YouTube</>}
+          </button>
+          
+          <button onClick={handleStartCapture} className="btn-secondary" style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
+            <Monitor size={18} /> Capturar Minha Tela
           </button>
 
-          <label className="btn-secondary" style={{ cursor: 'pointer', padding: '0.65rem 1rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', height: '42px' }}>
+          <label className="btn-secondary" style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }}>
+            <FolderOpen size={18} style={{ marginRight: '0.4rem' }} />
             📁 Enviar Print
             <input type="file" accept="image/*" onChange={handleFileUploadCalibrator} style={{ display: 'none' }} />
           </label>
         </div>
       </div>
 
+      {/* MODAL DO PLAYER YOUTUBE */}
+      {showPlayer && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000,
+          background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem'
+        }}>
+          <div style={{ background: '#0f172a', padding: '1rem', borderRadius: '12px', width: '100%', maxWidth: '900px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Play size={20} color="#f43f5e" /> Pausar no momento exato e capturar</h3>
+              <button onClick={() => setShowPlayer(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '1.5rem', cursor: 'pointer' }}>&times;</button>
+            </div>
+            
+            <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0, overflow: 'hidden', background: '#000', borderRadius: '8px' }}>
+              <iframe
+                src={`https://www.youtube.com/embed/${url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?\n]+)/)?.[1]}?autoplay=1&start=${(Number(minutes) * 60) + Number(seconds)}`}
+                frameBorder="0"
+                allow="autoplay; fullscreen"
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+              ></iframe>
+            </div>
+            
+            <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
+              <button onClick={handleStartCapture} className="btn-gradient" style={{ padding: '0.75rem 2rem', fontSize: '1.1rem' }}>
+                <Monitor size={20} /> Capturar Tela Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TELA DE RECORTE (CROP) */}
+      {capturedRawImage && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1050,
+          background: 'rgba(15, 23, 42, 0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem', overflowY: 'auto'
+        }}>
+          <div style={{ background: '#1e293b', padding: '1.5rem', borderRadius: '12px', width: '100%', maxWidth: '1000px', border: '1px solid var(--border-subtle)' }}>
+            <h3 style={{ color: 'white', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Scissors size={20} color="#38bdf8" /> Passo Final: Recorte a Imagem
+            </h3>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+              ⚠️ ATENÇÃO: Recorte **EXATAMENTE** a área do vídeo (remover barra de endereços do navegador, logo do YouTube, chat, etc). Isso garante que o Ao Vivo vai mapear perfeitamente.
+            </p>
+            
+            <div style={{ display: 'flex', justifyContent: 'center', background: '#000', padding: '1rem', borderRadius: '8px' }}>
+              <ReactCrop
+                crop={crop}
+                onChange={c => setCrop(c)}
+                onComplete={c => setCompletedCrop(c)}
+                aspect={16 / 9}
+              >
+                <img 
+                  ref={rawImgRef}
+                  src={capturedRawImage} 
+                  alt="Tela Capturada" 
+                  style={{ maxHeight: '60vh', width: 'auto' }}
+                />
+              </ReactCrop>
+            </div>
+            
+            <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+              <button onClick={() => setCapturedRawImage(null)} className="btn-secondary" style={{ color: '#f87171' }}>Cancelar</button>
+              <button onClick={handleConfirmCrop} className="btn-gradient">
+                <CheckCircle size={18} /> Confirmar Recorte
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ÁREA DE CALIBRAÇÃO E CANVAS DE MARCAÇÃO */}
-      {frameData && (
+      {frameData && !capturedRawImage && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1.5rem' }}>
           
           {/* PAINEL DA IMAGEM COM CAIXAS ROI OVERLAY */}
