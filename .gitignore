@@ -1,0 +1,33 @@
+# Ambientes virtuais
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# Variáveis de ambiente (contêm credenciais)
+.env
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Compactados
+*.zip
+
+# Banco de dados local
+*.db
+*.sqlite3
+
+# Build do frontend
+dist/
+
+# Arquivos temporários do Vite
+*.timestamp-*
+
+# IDE
+.vscode/
+
+# Arquivos legados (não mais usados no projeto)
+leilao_app.py
+leiloes_config*.json
