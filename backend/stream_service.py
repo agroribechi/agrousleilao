@@ -48,8 +48,25 @@ def _extract_video_id(url: str) -> str:
     return ""
 
 
+import shutil
+
+_last_diagnostic_error = ""
+
+def _get_ffmpeg_binary() -> str:
+    """Retorna o caminho do executável do ffmpeg (do sistema ou do imageio_ffmpeg)."""
+    sys_ffmpeg = shutil.which('ffmpeg')
+    if sys_ffmpeg:
+        return sys_ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return 'ffmpeg'
+
+
 def _resolve_stream_info(url: str) -> Optional[dict]:
     """Resolve a URL do stream e headers via yt-dlp. Resultado é cacheado."""
+    global _last_diagnostic_error
     video_id = _extract_video_id(url)
     cache_key = video_id or url
 
@@ -68,6 +85,11 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
             'no_warnings': True,
             'nocheckcertificate': True,
             'socket_timeout': 15,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web', 'ios']
+                }
+            }
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -83,6 +105,7 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
                         break
 
     except Exception as e:
+        _last_diagnostic_error = f"yt-dlp: {e}"
         print(f"[stream_service] yt-dlp erro: {e}")
 
     # Salva no cache
@@ -102,9 +125,9 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
 
 def _capture_frame_ffmpeg(stream_url: str, target_sec: int, http_headers: dict = None) -> Optional[np.ndarray]:
     """Captura um frame via ffmpeg subprocess no tempo especificado usando headers adequados."""
+    global _last_diagnostic_error
     try:
-        import imageio_ffmpeg
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffmpeg_exe = _get_ffmpeg_binary()
         
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
         os.close(tmp_fd)
@@ -135,7 +158,7 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int, http_headers: dict =
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
-            timeout=15,
+            timeout=20,
             **kwargs
         )
 
@@ -143,7 +166,9 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int, http_headers: dict =
         if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 2_000:
             frame = cv2.imread(tmp_path)
         else:
-            print(f"[stream_service] ffmpeg falhou. Stderr: {result.stderr.decode('utf-8', errors='ignore')}")
+            stderr_msg = result.stderr.decode('utf-8', errors='ignore')
+            _last_diagnostic_error = f"ffmpeg (code {result.returncode}): {stderr_msg[:200]}"
+            print(f"[stream_service] ffmpeg falhou. Stderr: {stderr_msg}")
 
         try:
             os.unlink(tmp_path)
@@ -152,6 +177,7 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int, http_headers: dict =
 
         return frame
     except Exception as e:
+        _last_diagnostic_error = f"ffmpeg fatal: {e}"
         print(f"[stream_service] ffmpeg erro fatal: {e}")
     return None
 
@@ -179,6 +205,8 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
     Busca um frame específico de uma transmissão/vídeo do YouTube no tempo determinado.
     Usa cache de stream URL e compressão JPEG otimizada.
     """
+    global _last_diagnostic_error
+    _last_diagnostic_error = ""
     frame = None
 
     # Se minutos e segundos vierem zerados, tenta extrair da própria URL se houver ?t=... ou &t=...
@@ -228,10 +256,8 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
                             frame = _capture_frame_cv2(stream_info.get("stream_url"), target_sec)
 
     if frame is None:
-        return (
-            None, None,
-            "ERRO CRITICO SERVIDOR: O backend não conseguiu baixar o frame do vídeo! Provavelmente o IP da Hostinger foi bloqueado ou o OpenCV do Linux está sem FFmpeg."
-        )
+        err_msg = f"Falha na extração de vídeo do servidor: {_last_diagnostic_error}" if _last_diagnostic_error else "Não foi possível carregar o vídeo no tempo solicitado. Verifique a URL."
+        return (None, None, err_msg)
 
     # Converte para JPEG base64 otimizado para o Frontend
     _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
