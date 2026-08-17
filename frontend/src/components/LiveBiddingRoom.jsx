@@ -5,8 +5,11 @@ import {
   X, RefreshCw, Trash2, Edit2, Sparkles, Layers, DollarSign, Camera,
   Wifi, BarChart3, TrendingUp, Target, FolderDown, Check,
   Sliders, ChevronDown, ChevronUp, Settings, Eye, EyeOff, Search, Calendar,
-  MessageSquare, MessageSquarePlus, FileText, Image as ImageIcon
+  MessageSquare, MessageSquarePlus, FileText, Image as ImageIcon, Crop
 } from 'lucide-react';
+
+import ReactCrop from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 
 const PRESET_CATEGORIES = [
   'Bezerros', 'Novilhas', 'Nelore', 'Matrizes', 'Boi Gordo', 'Garrotes', 'Cruzado'
@@ -86,6 +89,14 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     log_id: null
   });
   const [viewingPrintImage, setViewingPrintImage] = useState(null);
+
+  const [hasScreenCapture, setHasScreenCapture] = useState(false);
+  const [showCropModal, setShowCropModal] = useState(false);
+  const [capturedRawImage, setCapturedRawImage] = useState(null);
+  const [crop, setCrop] = useState();
+  const [completedCrop, setCompletedCrop] = useState(null);
+  const [savedCropRect, setSavedCropRect] = useState(null);
+  const rawImgRef = useRef(null);
 
   const isLiveStreamRef = useRef(false);
   const videoUrlRef = useRef(videoUrl);
@@ -323,31 +334,77 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const handleStartScreenCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "never" },
+        video: { displaySurface: "browser" },
         audio: false
       });
       screenStreamRef.current = stream;
       if (screenVideoRef.current) {
         screenVideoRef.current.srcObject = stream;
         screenVideoRef.current.play();
+        
+        screenVideoRef.current.onloadedmetadata = () => {
+          setTimeout(() => {
+            const canvas = document.createElement('canvas');
+            canvas.width = screenVideoRef.current.videoWidth;
+            canvas.height = screenVideoRef.current.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(screenVideoRef.current, 0, 0);
+            setCapturedRawImage(canvas.toDataURL('image/jpeg', 0.9));
+            setShowCropModal(true);
+          }, 500);
+        };
       }
       setHasScreenCapture(true);
       setViewMode('frame');
-      alert("Janela selecionada com sucesso! A IA capturará a tela diretamente a cada varredura.");
     } catch (err) {
       console.error("Erro na captura de tela:", err);
     }
   };
 
+  const handleConfirmCrop = () => {
+    if (!completedCrop || !completedCrop.width || !completedCrop.height || !rawImgRef.current) {
+      alert("Por favor, selecione a área de recorte do vídeo.");
+      return;
+    }
+    const pX = completedCrop.x / rawImgRef.current.width;
+    const pY = completedCrop.y / rawImgRef.current.height;
+    const pW = completedCrop.width / rawImgRef.current.width;
+    const pH = completedCrop.height / rawImgRef.current.height;
+    
+    setSavedCropRect({ pX, pY, pW, pH });
+    setShowCropModal(false);
+    showToast('Área de vídeo vinculada com sucesso!');
+  };
+
   const captureFrameFromScreen = () => {
     if (!screenVideoRef.current || !hiddenCanvasRef.current) return null;
     const video = screenVideoRef.current;
-    const canvas = hiddenCanvasRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    
+    const canvas = hiddenCanvasRef.current;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (savedCropRect) {
+      const cropW = savedCropRect.pW * video.videoWidth;
+      const cropH = savedCropRect.pH * video.videoHeight;
+      canvas.width = cropW;
+      canvas.height = cropH;
+      ctx.drawImage(
+        video,
+        savedCropRect.pX * video.videoWidth,
+        savedCropRect.pY * video.videoHeight,
+        cropW,
+        cropH,
+        0,
+        0,
+        cropW,
+        cropH
+      );
+    } else {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
     return canvas.toDataURL('image/jpeg', 0.85);
   };
 
@@ -1013,6 +1070,19 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                 }}
               >
                 <Camera size={14} /> Captura IA
+              </button>
+              <button 
+                onClick={handleStartScreenCapture}
+                style={{
+                  background: hasScreenCapture ? 'rgba(16, 185, 129, 0.3)' : 'transparent',
+                  border: hasScreenCapture ? '1px solid #34d399' : '1px solid #475569',
+                  color: hasScreenCapture ? '#34d399' : '#e2e8f0',
+                  padding: '0.3rem 0.65rem', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: '0.3rem'
+                }}
+                title="Vincular a tela do leilão para extração local sem peso no servidor"
+              >
+                {hasScreenCapture ? <Check size={14} /> : <Crop size={14} />} {hasScreenCapture ? 'Tela Vinculada' : 'Vincular Tela'}
               </button>
 
               {/* BOTÃO MAXIMIZAR VÍDEO (EXCELENTE PARA TELAS CELULAR) */}
@@ -1696,6 +1766,55 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
               alt="Print do Histórico" 
               style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: '10px', display: 'block', objectFit: 'contain' }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CROP DA TELA */}
+      {showCropModal && capturedRawImage && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.9)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{ background: '#1e293b', padding: '1.5rem', borderRadius: '16px', maxWidth: '90vw', maxHeight: '90vh', overflow: 'auto', border: '1px solid var(--border-subtle)' }}>
+            <h3 style={{ color: '#f8fafc', marginBottom: '1rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Crop size={24} color="#38bdf8" />
+              Recorte a Área do Vídeo
+            </h3>
+            <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1rem' }}>
+              Arraste o mouse para criar um retângulo de seleção. <strong>Ajuste as bordas para que fiquem EXATAMENTE em cima do vídeo do leilão</strong>.
+            </p>
+            
+            <div style={{ position: 'relative', border: '2px dashed #475569', borderRadius: '8px', overflow: 'hidden' }}>
+              <ReactCrop
+                crop={crop}
+                onChange={(c) => setCrop(c)}
+                onComplete={(c) => setCompletedCrop(c)}
+                keepSelection={true}
+              >
+                <img 
+                  ref={rawImgRef}
+                  src={capturedRawImage} 
+                  alt="Tela Completa" 
+                  style={{ maxHeight: '60vh', display: 'block' }} 
+                />
+              </ReactCrop>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
+              <button 
+                className="btn-secondary"
+                onClick={() => { setShowCropModal(false); setHasScreenCapture(false); }}
+              >
+                Cancelar
+              </button>
+              <button 
+                className="btn-gradient"
+                onClick={handleConfirmCrop}
+              >
+                Confirmar Recorte Perfeito
+              </button>
+            </div>
           </div>
         </div>
       )}
