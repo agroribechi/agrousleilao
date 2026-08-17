@@ -107,11 +107,14 @@ def _resolve_stream_url(url: str) -> Optional[str]:
 def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarray]:
     """Captura um frame via ffmpeg subprocess no tempo especificado."""
     try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
         os.close(tmp_fd)
 
         ffmpeg_cmd = [
-            'ffmpeg', '-y',
+            ffmpeg_exe, '-y',
             '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             '-ss', str(target_sec),
             '-i', stream_url,
@@ -213,33 +216,10 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
                         if frame is None:
                             frame = _capture_frame_cv2(stream_url, target_sec)
 
-    # --- Estratégia 2 (Fallback Resiliente): Thumbnail público em HD ---
-    if frame is None and video_id:
-        print(f"[stream_service] Tentando fallback de thumbnail pública para video_id={video_id}")
-        thumb_sizes = [
-            f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
-            f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
-            f"https://img.youtube.com/vi/{video_id}/sddefault.jpg",
-            f"https://img.youtube.com/vi/{video_id}/0.jpg",
-        ]
-        for thumb_url in thumb_sizes:
-            try:
-                req = urllib.request.urlopen(thumb_url, timeout=5)
-                img_bytes = req.read()
-                if len(img_bytes) > 10_000:
-                    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-                    if img is not None and img.shape[0] >= 200 and img.shape[1] >= 200:
-                        frame = img
-                        print(f"[stream_service] Thumbnail carregada com sucesso de {thumb_url}")
-                        break
-            except Exception as e:
-                print(f"[stream_service] Falha ao baixar thumbnail {thumb_url}: {e}")
-
     if frame is None:
         return (
             None, None,
-            "Não foi possível capturar frame do vídeo no momento especificado. "
-            "Verifique o link ou utilize o envio de print/captura de tela."
+            "ERRO CRITICO SERVIDOR: O backend não conseguiu baixar o frame do vídeo! Provavelmente o IP da Hostinger foi bloqueado ou o OpenCV do Linux está sem FFmpeg."
         )
 
     # Converte para JPEG base64 otimizado para o Frontend
