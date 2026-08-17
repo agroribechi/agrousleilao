@@ -48,45 +48,38 @@ def _extract_video_id(url: str) -> str:
     return ""
 
 
-def _resolve_stream_url(url: str) -> Optional[str]:
-    """Resolve a URL do stream via yt-dlp. Resultado é cacheado."""
+def _resolve_stream_info(url: str) -> Optional[dict]:
+    """Resolve a URL do stream e headers via yt-dlp. Resultado é cacheado."""
     video_id = _extract_video_id(url)
     cache_key = video_id or url
 
     # Verifica cache
     cached = _stream_url_cache.get(cache_key)
     if cached and (time.time() - cached["timestamp"]) < _CACHE_TTL_SEC:
-        print(f"[stream_service] Usando stream URL em cache para {cache_key}")
-        return cached["stream_url"]
+        return cached
 
     # Resolve via yt-dlp
     stream_url = None
+    http_headers = {}
     try:
         ydl_opts = {
-            'format': '22/18/136/137/best[vcodec!=none]/best',
+            'format': '18/22/best[vcodec!=none]/best',
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
             'socket_timeout': 15,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_vr']
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            }
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             stream_url = info.get('url')
+            http_headers = info.get('http_headers', {})
             if not stream_url and 'formats' in info:
                 for fmt in reversed(info.get('formats', [])):
                     u = fmt.get('url', '')
                     vcodec = fmt.get('vcodec', 'none')
                     if u and vcodec and vcodec != 'none':
                         stream_url = u
+                        http_headers = fmt.get('http_headers', http_headers)
                         break
 
     except Exception as e:
@@ -94,18 +87,21 @@ def _resolve_stream_url(url: str) -> Optional[str]:
 
     # Salva no cache
     if stream_url:
-        _stream_url_cache[cache_key] = {
+        result = {
             "stream_url": stream_url,
+            "http_headers": http_headers,
             "timestamp": time.time(),
             "video_id": video_id
         }
+        _stream_url_cache[cache_key] = result
         print(f"[stream_service] Stream URL resolvida e cacheada para {cache_key}")
+        return result
 
-    return stream_url
+    return None
 
 
-def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarray]:
-    """Captura um frame via ffmpeg subprocess no tempo especificado."""
+def _capture_frame_ffmpeg(stream_url: str, target_sec: int, http_headers: dict = None) -> Optional[np.ndarray]:
+    """Captura um frame via ffmpeg subprocess no tempo especificado usando headers adequados."""
     try:
         import imageio_ffmpeg
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -113,15 +109,24 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarr
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jpg')
         os.close(tmp_fd)
 
-        ffmpeg_cmd = [
-            ffmpeg_exe, '-y',
-            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        ffmpeg_cmd = [ffmpeg_exe, '-y']
+        
+        headers_dict = http_headers or {}
+        user_agent = headers_dict.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        
+        # Adiciona headers customizados para evitar 403 Forbidden
+        for k, v in headers_dict.items():
+            if k.lower() != 'user-agent':
+                ffmpeg_cmd.extend(['-headers', f'{k}: {v}\r\n'])
+        
+        ffmpeg_cmd.extend([
+            '-user_agent', user_agent,
             '-ss', str(target_sec),
             '-i', stream_url,
             '-frames:v', '1',
             '-q:v', '2',
             tmp_path
-        ]
+        ])
 
         kwargs = {}
         if os.name == 'nt':
@@ -130,7 +135,7 @@ def _capture_frame_ffmpeg(stream_url: str, target_sec: int) -> Optional[np.ndarr
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
-            timeout=20,
+            timeout=15,
             **kwargs
         )
 
@@ -187,13 +192,15 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
 
     # --- Estratégia 1: Stream URL (com cache) + ffmpeg/cv2 ---
     if url:
-        stream_url = _resolve_stream_url(url)
+        stream_info = _resolve_stream_info(url)
 
-        if stream_url:
+        if stream_info:
             t_start = time.time()
+            stream_url = stream_info.get("stream_url")
+            http_headers = stream_info.get("http_headers", {})
             
-            # 1a. Tenta ffmpeg (mais rápido e preciso)
-            frame = _capture_frame_ffmpeg(stream_url, target_sec)
+            # 1a. Tenta ffmpeg (mais rápido e preciso com headers)
+            frame = _capture_frame_ffmpeg(stream_url, target_sec, http_headers)
 
             # 1b. Fallback para cv2 se ffmpeg falhar
             if frame is None:
@@ -210,11 +217,15 @@ def fetch_youtube_frame(url: str, min_v: int = 0, seg_v: int = 0, is_live: bool 
                     print(f"[stream_service] Cache invalidado para {cache_key}, tentando resolver novamente...")
                     
                     # Tenta uma vez mais com URL fresca
-                    stream_url = _resolve_stream_url(url)
-                    if stream_url:
-                        frame = _capture_frame_ffmpeg(stream_url, target_sec)
+                    stream_info = _resolve_stream_info(url)
+                    if stream_info:
+                        frame = _capture_frame_ffmpeg(
+                            stream_info.get("stream_url"),
+                            target_sec,
+                            stream_info.get("http_headers", {})
+                        )
                         if frame is None:
-                            frame = _capture_frame_cv2(stream_url, target_sec)
+                            frame = _capture_frame_cv2(stream_info.get("stream_url"), target_sec)
 
     if frame is None:
         return (

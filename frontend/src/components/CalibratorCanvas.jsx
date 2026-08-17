@@ -74,6 +74,39 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     }
   };
 
+  // Busca o Frame puro do YouTube diretamente pelo Backend
+  const handleFetchBackendFrame = async () => {
+    if (!url || !url.trim()) {
+      alert('Por favor, informe a URL ou ID do vídeo do YouTube.');
+      return;
+    }
+    setLoadingFrame(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/stream/frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: url,
+          minutes: Number(minutes) || 0,
+          seconds: Number(seconds) || 0
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao capturar frame do servidor.');
+      
+      setFrameData({
+        image: data.image,
+        width: data.width,
+        height: data.height
+      });
+      showToast(`Frame capturado com sucesso no tempo ${minutes}m ${seconds}s!`);
+    } catch (err) {
+      alert(`Erro ao buscar frame: ${err.message}`);
+    } finally {
+      setLoadingFrame(false);
+    }
+  };
+
   // Abre o Player do YouTube
   const handleOpenPlayer = () => {
     if (!url || !url.trim()) {
@@ -433,21 +466,30 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
             />
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem', flexWrap: 'wrap' }}>
+          <button 
+            onClick={handleFetchBackendFrame} 
+            disabled={loadingFrame} 
+            className="btn-gradient" 
+            style={{ flex: 1, minWidth: '220px' }}
+          >
+            {loadingFrame ? 'Carregando Frame...' : <><Camera size={18} /> Extrair Frame do YouTube</>}
+          </button>
+
           <button 
             onClick={handleOpenPlayer} 
             disabled={loadingFrame} 
-            className="btn-gradient" 
-            style={{ flex: 1 }}
+            className="btn-secondary" 
+            style={{ flex: 1, minWidth: '200px' }}
           >
-            {loadingFrame ? 'Carregando...' : <><Play size={18} /> Tocar Vídeo no YouTube</>}
+            <Play size={18} /> Tocar no Player
           </button>
           
-          <button onClick={handleStartCapture} className="btn-secondary" style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
-            <Monitor size={18} /> Capturar Minha Tela
+          <button onClick={handleStartCapture} className="btn-secondary" style={{ flex: 1, minWidth: '180px', backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
+            <Monitor size={18} /> Capturar Tela
           </button>
 
-          <label className="btn-secondary" style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }}>
+          <label className="btn-secondary" style={{ flex: 1, minWidth: '160px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }}>
             <FolderOpen size={18} style={{ marginRight: '0.4rem' }} />
             📁 Enviar Print
             <input type="file" accept="image/*" onChange={handleFileUploadCalibrator} style={{ display: 'none' }} />
