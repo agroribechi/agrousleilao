@@ -355,7 +355,6 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
         };
       }
       setHasScreenCapture(true);
-      setViewMode('frame');
     } catch (err) {
       console.error("Erro na captura de tela:", err);
     }
