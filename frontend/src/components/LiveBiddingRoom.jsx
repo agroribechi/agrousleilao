@@ -180,10 +180,16 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   // Obtém o tempo atual do player de forma confiável
   const getPlayerCurrentTimeSec = useCallback(() => {
     if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
-      return Math.floor(ytPlayerRef.current.getCurrentTime());
+      try {
+        const t = ytPlayerRef.current.getCurrentTime();
+        if (typeof t === 'number' && !isNaN(t) && t > 0) {
+          return Math.floor(t);
+        }
+      } catch (e) {}
     }
+    if (playerCurrentTime > 0) return playerCurrentTime;
     return 0;
-  }, []);
+  }, [playerCurrentTime]);
 
   // ---------- FIM YOUTUBE IFRAME PLAYER API ----------
 
@@ -426,20 +432,23 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     setIsCapturingPrint(true);
     let printB64 = null;
 
-    // 1. Tenta via captura de tela direta (getDisplayMedia)
-    if (screenStreamRef.current) {
-      printB64 = captureFrameFromScreen();
-    }
-
-    // 2. Se não conseguiu, usa o frame capturado mais recente
-    if (!printB64 && capturedFrameImage) {
+    // 1. Prioridade 1: Frame mais recente capturado pela IA na Varredura Ao Vivo
+    if (capturedFrameImage) {
       printB64 = capturedFrameImage;
     }
 
-    // 3. Se ainda não tem e tem vídeo do YouTube, busca via backend
+    // 2. Prioridade 2: Se tem captura de tela ativa do navegador
+    if (!printB64 && screenStreamRef.current) {
+      printB64 = captureFrameFromScreen();
+    }
+
+    // 3. Prioridade 3: Se ainda não tem e tem vídeo do YouTube, busca no backend no tempo exato atual
     if (!printB64 && videoUrlRef.current) {
       try {
-        const secTime = getPlayerCurrentTimeSec();
+        let secTime = getPlayerCurrentTimeSec();
+        if (secTime === 0 && playerCurrentTime > 0) {
+          secTime = playerCurrentTime;
+        }
         const m = Math.floor(secTime / 60);
         const s = secTime % 60;
         const res = await fetch(`${API_BASE}/api/stream/frame`, {
