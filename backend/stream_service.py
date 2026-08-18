@@ -87,7 +87,7 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
             'socket_timeout': 15,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web', 'ios']
+                    'player_client': ['android_vr', 'android', 'android_creator']
                 }
             }
         }
