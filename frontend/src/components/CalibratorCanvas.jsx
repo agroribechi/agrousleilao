@@ -101,7 +101,12 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       });
       showToast(`Frame capturado com sucesso no tempo ${minutes}m ${seconds}s!`);
     } catch (err) {
-      alert(`Erro ao buscar frame: ${err.message}`);
+      if (err.message.includes('bot') || err.message.includes('confirm you') || err.message.includes('extração') || err.message.includes('400')) {
+        showToast('⚠️ YouTube bloqueou o IP do servidor (Bot Check). Abrindo Player para captura direta do seu navegador...');
+        setShowPlayer(true);
+      } else {
+        alert(`Erro ao buscar frame: ${err.message}`);
+      }
     } finally {
       setLoadingFrame(false);
     }
