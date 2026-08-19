@@ -839,9 +839,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       return;
     }
     setTestingKeyStatus('testing');
-    setTestingKeyMsg('Testando comunicação direta com Google Gemini 2.0 Flash...');
+    setTestingKeyMsg('Testando comunicação direta com Google Gemini 1.5 Flash...');
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
       const payload = {
         contents: [
           {
@@ -856,7 +856,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       });
       if (res.ok) {
         setTestingKeyStatus('valid');
-        setTestingKeyMsg('✅ Chave Válida! Conexão direta com Gemini 2.0 Flash estabelecida com sucesso.');
+        setTestingKeyMsg('✅ Chave Válida! Conexão direta com Gemini 1.5 Flash estabelecida com sucesso.');
         localStorage.setItem('gemini_api_key', key);
       } else {
         const errJson = await res.json().catch(() => ({}));
@@ -874,7 +874,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [lastScanMs, setLastScanMs] = useState(null);
 
   // ============================================================
-  // FUNÇÃO PRINCIPAL DE VARREDURA — IA GEMINI 2.0 VISION + OCR
+  // FUNÇÃO PRINCIPAL DE VARREDURA — IA GEMINI VISION + OCR
   // ============================================================
   const performLiveScan = useCallback(async () => {
     if (isScanningRef.current) return;
@@ -948,7 +948,7 @@ Retorne um JSON com os campos:
           }
         };
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

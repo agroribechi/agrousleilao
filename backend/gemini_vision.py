@@ -5,7 +5,7 @@ import httpx
 from typing import Dict, Any, Optional
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
 
 AUCTION_SYSTEM_PROMPT = '''Você é um especialista em visão computacional para transmissões de leilões de gado e agronegócio brasileiro (Canal do Boi, Canal Rural, Terra Viva, Remate Web, AgroBrasil, etc.).
 Sua tarefa é analisar o frame do vídeo da transmissão e extrair os dados estruturados do lote e do lance atual com máxima fidelidade.
