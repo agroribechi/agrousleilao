@@ -95,8 +95,20 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [capturedRawImage, setCapturedRawImage] = useState(null);
   const [crop, setCrop] = useState();
   const [completedCrop, setCompletedCrop] = useState(null);
-  const [savedCropRect, setSavedCropRect] = useState(null);
-  const rawImgRef = useRef(null);
+  // --- ESTADOS DA CALIBRAÇÃO DIRETA NA SALA AO VIVO ---
+  const [isCalibratingInRoom, setIsCalibratingInRoom] = useState(false);
+  const [inRoomCalibImage, setInRoomCalibImage] = useState(null);
+  const [inRoomCalibWidth, setInRoomCalibWidth] = useState(640);
+  const [inRoomCalibHeight, setInRoomCalibHeight] = useState(360);
+  const [inRoomFields, setInRoomFields] = useState([]);
+  const [inRoomStartPoint, setInRoomStartPoint] = useState(null);
+  const [inRoomDragPoint, setInRoomDragPoint] = useState(null);
+  const [inRoomIsDrawing, setInRoomIsDrawing] = useState(false);
+  const [inRoomOcrResults, setInRoomOcrResults] = useState(null);
+  const [inRoomTestingOcr, setInRoomTestingOcr] = useState(false);
+  const [inRoomSaving, setInRoomSaving] = useState(false);
+  const [inRoomTemplateName, setInRoomTemplateName] = useState('');
+  const inRoomImgRef = useRef(null);
 
   const isLiveStreamRef = useRef(false);
   const videoUrlRef = useRef(videoUrl);
@@ -366,19 +378,230 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     }
   };
 
-  const handleConfirmCrop = () => {
-    if (!completedCrop || !completedCrop.width || !completedCrop.height || !rawImgRef.current) {
-      alert("Por favor, selecione a área de recorte do vídeo.");
+  // ---------- FUNÇÕES DA CALIBRAÇÃO DIRETA NA SALA AO VIVO ----------
+  const handleStartInRoomCalib = async () => {
+    let base64 = null;
+
+    if (screenStreamRef.current) {
+      base64 = captureFrameFromScreen();
+    } else if (capturedFrameImage) {
+      base64 = capturedFrameImage;
+    } else if (manualImageB64) {
+      base64 = manualImageB64;
+    }
+
+    if (!base64) {
+      // Se não tem frame, captura a tela da aba do leilão
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: "browser" },
+          audio: false
+        });
+        screenStreamRef.current = stream;
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream;
+          screenVideoRef.current.play();
+        }
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.play();
+        
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            setTimeout(() => {
+              const canvas = document.createElement('canvas');
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              base64 = canvas.toDataURL('image/jpeg', 0.9);
+              resolve();
+            }, 600);
+          };
+        });
+      } catch (err) {
+        if (err.name !== "NotAllowedError") {
+          alert(`Para calibrar, compartilhe a tela ou selecione a imagem do lote.`);
+        }
+        return;
+      }
+    }
+
+    if (base64) {
+      const img = new Image();
+      img.onload = () => {
+        setInRoomCalibImage(base64);
+        setInRoomCalibWidth(img.width);
+        setInRoomCalibHeight(img.height);
+        setInRoomTemplateName(selectedTemplateName || 'Novo Gabarito');
+        
+        // Carrega campos do template selecionado
+        const curTemplate = templates.find(t => t.name === selectedTemplateName);
+        if (curTemplate && curTemplate.fields && curTemplate.fields.length > 0) {
+          setInRoomFields(curTemplate.fields);
+        } else {
+          setInRoomFields([]);
+        }
+        setInRoomOcrResults(null);
+        setIsCalibratingInRoom(true);
+      };
+      img.src = base64;
+    }
+  };
+
+  const getInRoomClickCoords = (e) => {
+    if (!inRoomImgRef.current) return null;
+    const rect = inRoomImgRef.current.getBoundingClientRect();
+    let clientX = e.clientX;
+    let clientY = e.clientY;
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+      clientX = e.changedTouches[0].clientX;
+      clientY = e.changedTouches[0].clientY;
+    }
+    const displayX = clientX - rect.left;
+    const displayY = clientY - rect.top;
+    const scaleX = inRoomCalibWidth / rect.width;
+    const scaleY = inRoomCalibHeight / rect.height;
+
+    return {
+      x: Math.round(displayX * scaleX),
+      y: Math.round(displayY * scaleY),
+      displayX,
+      displayY,
+      rectWidth: rect.width,
+      rectHeight: rect.height
+    };
+  };
+
+  const handleInRoomMouseDown = (e) => {
+    if (!inRoomCalibImage) return;
+    const coords = getInRoomClickCoords(e);
+    if (!coords) return;
+    setInRoomStartPoint(coords);
+    setInRoomDragPoint(coords);
+    setInRoomIsDrawing(true);
+  };
+
+  const handleInRoomMouseMove = (e) => {
+    if (!inRoomIsDrawing) return;
+    const coords = getInRoomClickCoords(e);
+    if (coords) setInRoomDragPoint(coords);
+  };
+
+  const handleInRoomMouseUp = (e) => {
+    if (!inRoomIsDrawing || !inRoomStartPoint) return;
+    const endPoint = getInRoomClickCoords(e) || inRoomDragPoint;
+    setInRoomIsDrawing(false);
+    if (!endPoint) return;
+
+    const x1 = Math.min(inRoomStartPoint.x, endPoint.x);
+    const y1 = Math.min(inRoomStartPoint.y, endPoint.y);
+    const x2 = Math.max(inRoomStartPoint.x, endPoint.x);
+    const y2 = Math.max(inRoomStartPoint.y, endPoint.y);
+
+    if (Math.abs(x2 - x1) < 12 || Math.abs(y2 - y1) < 12) {
+      setInRoomStartPoint(null);
+      setInRoomDragPoint(null);
       return;
     }
-    const pX = completedCrop.x / rawImgRef.current.width;
-    const pY = completedCrop.y / rawImgRef.current.height;
-    const pW = completedCrop.width / rawImgRef.current.width;
-    const pH = completedCrop.height / rawImgRef.current.height;
-    
-    setSavedCropRect({ pX, pY, pW, pH });
-    setShowCropModal(false);
-    showToast('Área de vídeo vinculada com sucesso!');
+
+    const defaultNames = ["Número do Lote", "Preço Atual", "Descrição do Lote", "Idade / Peso"];
+    const fieldName = defaultNames[inRoomFields.length] || `Campo ${inRoomFields.length + 1}`;
+
+    const newField = {
+      nome: fieldName,
+      x1, y1, x2, y2,
+      ref_w: inRoomCalibWidth,
+      ref_h: inRoomCalibHeight
+    };
+
+    setInRoomFields([...inRoomFields, newField]);
+    setInRoomStartPoint(null);
+    setInRoomDragPoint(null);
+  };
+
+  const handleInRoomAddPreset = (fieldType) => {
+    const w = inRoomCalibWidth;
+    const h = inRoomCalibHeight;
+    let preset = { nome: "Campo", x1: Math.round(w * 0.05), y1: Math.round(h * 0.1), x2: Math.round(w * 0.35), y2: Math.round(h * 0.25), ref_w: w, ref_h: h };
+    if (fieldType === 'lote') {
+      preset = { nome: "Número do Lote", x1: Math.round(w * 0.04), y1: Math.round(h * 0.05), x2: Math.round(w * 0.38), y2: Math.round(h * 0.22), ref_w: w, ref_h: h };
+    } else if (fieldType === 'preco') {
+      preset = { nome: "Preço Atual", x1: Math.round(w * 0.55), y1: Math.round(h * 0.72), x2: Math.round(w * 0.96), y2: Math.round(h * 0.92), ref_w: w, ref_h: h };
+    } else if (fieldType === 'desc') {
+      preset = { nome: "Descrição do Lote", x1: Math.round(w * 0.04), y1: Math.round(h * 0.65), x2: Math.round(w * 0.96), y2: Math.round(h * 0.85), ref_w: w, ref_h: h };
+    } else if (fieldType === 'idade') {
+      preset = { nome: "Idade / Peso", x1: Math.round(w * 0.04), y1: Math.round(h * 0.28), x2: Math.round(w * 0.45), y2: Math.round(h * 0.42), ref_w: w, ref_h: h };
+    }
+    setInRoomFields([...inRoomFields, preset]);
+    showToast(`Caixa '${preset.nome}' adicionada!`);
+  };
+
+  const handleInRoomDeleteField = (index) => {
+    setInRoomFields(inRoomFields.filter((_, i) => i !== index));
+  };
+
+  const handleInRoomTestOcr = async () => {
+    if (!inRoomCalibImage || inRoomFields.length === 0) {
+      alert("Desenhe ao menos uma caixa antes de testar o OCR.");
+      return;
+    }
+    setInRoomTestingOcr(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/ocr/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_base64: inRoomCalibImage,
+          fields: inRoomFields
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao testar OCR');
+      setInRoomOcrResults(data.results || {});
+      showToast('🧪 OCR processado com sucesso na tela!');
+    } catch (err) {
+      alert(`Erro no OCR: ${err.message}`);
+    } finally {
+      setInRoomTestingOcr(false);
+    }
+  };
+
+  const handleInRoomSaveTemplate = async () => {
+    if (!inRoomTemplateName.trim()) {
+      alert("Por favor, informe o nome do Gabarito.");
+      return;
+    }
+    if (inRoomFields.length === 0) {
+      alert("Desenhe ao menos um campo antes de salvar.");
+      return;
+    }
+    setInRoomSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: inRoomTemplateName.trim(),
+          video_url: videoUrl,
+          fields: inRoomFields
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao salvar gabarito');
+      }
+      setSelectedTemplateName(inRoomTemplateName.trim());
+      setIsCalibratingInRoom(false);
+      showToast(`🎯 Gabarito '${inRoomTemplateName.trim()}' salvo e ativado na sala com 100% de precisão!`);
+    } catch (err) {
+      alert(`Erro: ${err.message}`);
+    } finally {
+      setInRoomSaving(false);
+    }
   };
 
   const captureFrameFromScreen = () => {
@@ -1125,18 +1348,19 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                 <span>Print & Comentar</span>
               </button>
 
-              {/* BOTÃO ATALHO "AJUSTAR ROI RÁPIDO" */}
+              {/* BOTÃO CALIBRAÇÃO DIRETA NA SALA AO VIVO */}
               <button 
-                onClick={onNavigateToCalibrator}
-                className="btn-secondary"
+                onClick={handleStartInRoomCalib}
+                className="btn-gradient"
                 style={{
-                  padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 700,
-                  color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.4)',
-                  background: 'rgba(56, 189, 248, 0.1)'
+                  padding: '0.3rem 0.75rem', fontSize: '0.75rem', fontWeight: 800,
+                  display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
                 }}
-                title="Abrir o Calibrador para definir áreas de leitura"
+                title="Congelar a tela atual e desenhar as caixas de leitura diretamente aqui na sala com 100% de precisão"
               >
-                <Target size={14} color="#38bdf8" /> ROI
+                <Target size={14} />
+                <span>🎯 Calibrar na Tela</span>
               </button>
 
               <label className="btn-secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -1774,6 +1998,202 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
               alt="Print do Histórico" 
               style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: '10px', display: 'block', objectFit: 'contain' }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CALIBRAÇÃO DIRETA NA SALA AO VIVO */}
+      {isCalibratingInRoom && inRoomCalibImage && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(5, 8, 15, 0.95)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: '#090d16', padding: '1.5rem', borderRadius: '18px', maxWidth: '1100px', width: '100%',
+            maxHeight: '94vh', overflow: 'auto', border: '1px solid rgba(99, 102, 241, 0.4)',
+            boxShadow: '0 25px 70px rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', gap: '1rem'
+          }}>
+            {/* CABEÇALHO DA CALIBRAÇÃO */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.85rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div style={{ background: 'linear-gradient(135deg, #6366f1, #a855f7)', padding: '0.5rem', borderRadius: '10px', color: '#fff' }}>
+                  <Target size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#f8fafc' }}>
+                    🎯 Calibração Direta na Tela do Leilão
+                  </h3>
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                    Desenhe os retângulos exatamente em cima dos dados do lote. 100% de precisão sem troca de telas.
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input 
+                  type="text" 
+                  className="glass-input" 
+                  value={inRoomTemplateName} 
+                  onChange={(e) => setInRoomTemplateName(e.target.value)} 
+                  placeholder="Nome do Gabarito..."
+                  style={{ width: '180px', padding: '0.4rem 0.65rem', fontSize: '0.85rem', fontWeight: 700 }}
+                />
+                <button 
+                  onClick={() => setIsCalibratingInRoom(false)} 
+                  className="btn-secondary" 
+                  style={{ padding: '0.4rem 0.6rem', borderRadius: '50%' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* BOTÕES DE ATALHO RÁPIDO E AÇÕES */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700 }}>+ Atalhos Rápidos:</span>
+                <button onClick={() => handleInRoomAddPreset('lote')} className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', color: '#38bdf8', borderColor: '#38bdf8' }}>+ Lote</button>
+                <button onClick={() => handleInRoomAddPreset('preco')} className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', color: '#34d399', borderColor: '#34d399' }}>+ Preço</button>
+                <button onClick={() => handleInRoomAddPreset('desc')} className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', color: '#fbbf24', borderColor: '#fbbf24' }}>+ Descrição</button>
+                <button onClick={() => handleInRoomAddPreset('idade')} className="btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', color: '#f472b6', borderColor: '#f472b6' }}>+ Idade/Peso</button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button 
+                  onClick={handleInRoomTestOcr} 
+                  disabled={inRoomTestingOcr || inRoomFields.length === 0} 
+                  className="btn-secondary" 
+                  style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.4)', background: 'rgba(56, 189, 248, 0.1)' }}
+                >
+                  <Sparkles size={15} />
+                  {inRoomTestingOcr ? 'Testando...' : '🧪 Testar OCR na Imagem'}
+                </button>
+                <button 
+                  onClick={handleInRoomSaveTemplate} 
+                  disabled={inRoomSaving || inRoomFields.length === 0} 
+                  className="btn-gradient" 
+                  style={{ padding: '0.35rem 1rem', fontSize: '0.8rem', fontWeight: 800 }}
+                >
+                  <Check size={16} />
+                  {inRoomSaving ? 'Salvando...' : '💾 Salvar e Ativar na Sala'}
+                </button>
+              </div>
+            </div>
+
+            {/* ÁREA DE DESENHO INTERATIVA (CANVAS SOBRE A IMAGEM) */}
+            <div 
+              style={{
+                position: 'relative', width: '100%', maxHeight: '52vh', display: 'flex', justifyContent: 'center',
+                alignItems: 'center', background: '#000', borderRadius: '12px', overflow: 'hidden',
+                border: '2px solid rgba(99, 102, 241, 0.3)', userSelect: 'none', cursor: 'crosshair'
+              }}
+              onMouseDown={handleInRoomMouseDown}
+              onMouseMove={handleInRoomMouseMove}
+              onMouseUp={handleInRoomMouseUp}
+              onTouchStart={handleInRoomMouseDown}
+              onTouchMove={handleInRoomMouseMove}
+              onTouchEnd={handleInRoomMouseUp}
+            >
+              <img 
+                ref={inRoomImgRef}
+                src={inRoomCalibImage} 
+                alt="Frame Congelado para Calibração" 
+                style={{ maxWidth: '100%', maxHeight: '52vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} 
+              />
+
+              {/* RENDERIZAÇÃO DAS CAIXAS DESENHADAS */}
+              {inRoomImgRef.current && inRoomFields.map((field, idx) => {
+                const rect = inRoomImgRef.current.getBoundingClientRect();
+                const scaleX = rect.width / inRoomCalibWidth;
+                const scaleY = rect.height / inRoomCalibHeight;
+
+                const left = field.x1 * scaleX;
+                const top = field.y1 * scaleY;
+                const width = (field.x2 - field.x1) * scaleX;
+                const height = (field.y2 - field.y1) * scaleY;
+
+                const colors = ['#38bdf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
+                const boxColor = colors[idx % colors.length];
+
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      position: 'absolute',
+                      left: `${left}px`,
+                      top: `${top}px`,
+                      width: `${width}px`,
+                      height: `${height}px`,
+                      border: `2px solid ${boxColor}`,
+                      background: `${boxColor}22`,
+                      pointerEvents: 'auto',
+                      zIndex: 10
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div style={{
+                      position: 'absolute', top: '-22px', left: '-2px', background: boxColor, color: '#000',
+                      fontSize: '0.68rem', fontWeight: 800, padding: '0.1rem 0.4rem', borderRadius: '4px 4px 0 0',
+                      display: 'flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap'
+                    }}>
+                      <span>{field.nome}</span>
+                      <button 
+                        onClick={() => handleInRoomDeleteField(idx)}
+                        style={{ background: 'none', border: 'none', color: '#000', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* CAIXA ATUAL SENDO ARRASTADA */}
+              {inRoomIsDrawing && inRoomStartPoint && inRoomDragPoint && (
+                <div style={{
+                  position: 'absolute',
+                  left: `${Math.min(inRoomStartPoint.displayX, inRoomDragPoint.displayX)}px`,
+                  top: `${Math.min(inRoomStartPoint.displayY, inRoomDragPoint.displayY)}px`,
+                  width: `${Math.abs(inRoomDragPoint.displayX - inRoomStartPoint.displayX)}px`,
+                  height: `${Math.abs(inRoomDragPoint.displayY - inRoomStartPoint.displayY)}px`,
+                  border: '2px dashed #f43f5e',
+                  background: 'rgba(244, 63, 94, 0.25)',
+                  pointerEvents: 'none',
+                  zIndex: 20
+                }} />
+              )}
+            </div>
+
+            {/* RESULTADOS DO TESTE DE OCR EM TEMPO REAL */}
+            {inRoomOcrResults && (
+              <div style={{ background: 'rgba(15, 23, 42, 0.8)', padding: '0.85rem', borderRadius: '10px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <Sparkles size={14} /> Leitura OCR Instantânea dos Campos:
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                  {Object.entries(inRoomOcrResults).map(([k, v]) => (
+                    <div key={k} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '0.3rem 0.6rem', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                      <span style={{ color: '#94a3b8', fontWeight: 600 }}>{k}: </span>
+                      <strong style={{ color: v ? '#34d399' : '#f43f5e' }}>{v || '--- (vazio)'}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* LISTA DE CAMPOS CALIBRADOS */}
+            {inRoomFields.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700 }}>Campos ativos ({inRoomFields.length}):</span>
+                {inRoomFields.map((f, i) => (
+                  <span key={i} style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', padding: '0.2rem 0.5rem', borderRadius: '6px', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                    {f.nome}
+                    <X size={12} style={{ cursor: 'pointer' }} onClick={() => handleInRoomDeleteField(i)} />
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
