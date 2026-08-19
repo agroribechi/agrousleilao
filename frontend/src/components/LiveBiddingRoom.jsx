@@ -830,37 +830,43 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     }
   };
 
-  // Função para testar conexão com a API do Gemini
+  // Função para testar conexão direta com a API do Gemini
   const handleTestApiKey = async () => {
-    if (!geminiApiKey.trim()) {
+    const key = geminiApiKey.trim();
+    if (!key) {
       setTestingKeyStatus('invalid');
       setTestingKeyMsg('Por favor, digite ou cole sua chave antes de testar.');
       return;
     }
     setTestingKeyStatus('testing');
-    setTestingKeyMsg('Testando comunicação com Google Gemini 2.0 Flash...');
+    setTestingKeyMsg('Testando comunicação direta com Google Gemini 2.0 Flash...');
     try {
-      const dummyB64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-      const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+      const payload = {
+        contents: [
+          {
+            parts: [{ text: "Responda apenas com a palavra OK." }]
+          }
+        ]
+      };
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_base64: dummyB64,
-          api_key: geminiApiKey.trim()
-        })
+        body: JSON.stringify(payload)
       });
-      const data = await res.json();
-      if (data.status === 'success' || data.is_auction_screen !== undefined) {
+      if (res.ok) {
         setTestingKeyStatus('valid');
-        setTestingKeyMsg('✅ Chave Válida! Conectada com sucesso ao Gemini 2.0 Flash.');
-        localStorage.setItem('gemini_api_key', geminiApiKey.trim());
+        setTestingKeyMsg('✅ Chave Válida! Conexão direta com Gemini 2.0 Flash estabelecida com sucesso.');
+        localStorage.setItem('gemini_api_key', key);
       } else {
+        const errJson = await res.json().catch(() => ({}));
+        const msg = errJson.error?.message || `Erro HTTP ${res.status}`;
         setTestingKeyStatus('invalid');
-        setTestingKeyMsg(`❌ Erro: ${data.detail || 'Chave rejeitada pela API do Google'}`);
+        setTestingKeyMsg(`❌ Google API Erro: ${msg}`);
       }
     } catch (e) {
       setTestingKeyStatus('invalid');
-      setTestingKeyMsg(`❌ Erro de conexão: ${e.message}`);
+      setTestingKeyMsg(`❌ Falha de rede: ${e.message}`);
     }
   };
 
@@ -891,51 +897,139 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
 
     try {
       if (engineMode === 'gemini') {
-        const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
+        const key = geminiApiKey.trim();
+        if (!key) {
+          showToast('⚠️ Configure sua chave do Gemini no botão ⚙️ Chave.');
+          setShowApiKeyModal(true);
+          isScanningRef.current = false;
+          return;
+        }
+
+        const cleanB64 = imageBase64ToSend.includes(',') ? imageBase64ToSend.split(',')[1] : imageBase64ToSend;
+        let mimeType = 'image/jpeg';
+        if (imageBase64ToSend.includes('image/png')) mimeType = 'image/png';
+        else if (imageBase64ToSend.includes('image/webp')) mimeType = 'image/webp';
+
+        const systemPrompt = `Você é um especialista em visão computacional para transmissões de leilões de gado e agronegócio brasileiro (Canal do Boi, Canal Rural, Terra Viva, Remate Web, AgroBrasil, etc.).
+Sua tarefa é analisar o frame da transmissão e extrair os dados estruturados do lote e lance em JSON estrito.
+Retorne um JSON com os campos:
+- "is_auction_screen": true se for tela de leilão com dados de lote, false se for propaganda, vinheta ou intervalo.
+- "lot_number": número ou código do lote (ex: "14", "102-A").
+- "price": valor do lance ou preço atual (ex: "R$ 2.450,00").
+- "description": descrição dos animais (ex: "30 Machos Nelore Mocho").
+- "category": categoria (escolha entre: "Bezerros", "Novilhas", "Nelore", "Matrizes", "Boi Gordo", "Garrotes", "Cruzado", "Geral").
+- "quantity": quantidade de animais (ex: "30").
+- "weight": peso médio ou total (ex: "280 kg").
+- "seller": vendedor ou fazenda.
+- "location": cidade/estado.
+- "confidence": confiança de 0 a 1.`;
+
+        const payload = {
+          contents: [
+            {
+              parts: [
+                { text: "Analise esta imagem da transmissão de leilão de gado e extraia os dados do lote e lance em JSON." },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: cleanB64
+                  }
+                }
+              ]
+            }
+          ],
+          system_instruction: {
+            parts: [{ text: systemPrompt }]
+          },
+          generationConfig: {
+            response_mime_type: "application/json",
+            temperature: 0.1,
+            maxOutputTokens: 500
+          }
+        };
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+        const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_base64: imageBase64ToSend,
-            api_key: geminiApiKey || undefined,
-            channel_name: selectedTemplateName || 'Geral',
-            filter_categories: activeCategories
-          })
+          body: JSON.stringify(payload)
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Erro na visão Gemini.');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = errData.error?.message || `Erro ${res.status}`;
+          throw new Error(errMsg);
+        }
 
-        if (data.status === 'success') {
-          setCapturedFrameImage(imageBase64ToSend);
-          setGeminiStatus(data.is_auction_screen ? 'auction' : 'ad');
-          setOcrData({
-            "Número do Lote": data.lot_number,
-            "Preço Atual": data.price,
-            "Descrição do Lote": data.description,
-            "Categoria": data.category,
-            "Quantidade": data.quantity,
-            "Peso": data.weight,
-            "Vendedor": data.seller,
-            "Localização": data.location
-          });
+        const dataRes = await res.json();
+        const rawText = dataRes.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+        const cleanJson = rawText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+        const parsed = JSON.parse(cleanJson);
 
-          if (data.current_log) {
-            setCurrentLog(data.current_log);
-            fetchHistoryLogs(historyFilterChannel);
-          }
+        setCapturedFrameImage(imageBase64ToSend);
+        setGeminiStatus(parsed.is_auction_screen ? 'auction' : 'ad');
+        
+        const extractedLot = String(parsed.lot_number || '').trim();
+        const extractedPrice = String(parsed.price || '').trim();
+        const extractedCat = String(parsed.category || 'Geral').trim();
+        const extractedDesc = String(parsed.description || '').trim();
 
-          if (data.alert_triggered) {
+        setOcrData({
+          "Número do Lote": extractedLot,
+          "Preço Atual": extractedPrice,
+          "Descrição do Lote": extractedDesc,
+          "Categoria": extractedCat,
+          "Quantidade": parsed.quantity || '',
+          "Peso": parsed.weight || '',
+          "Vendedor": parsed.seller || '',
+          "Localização": parsed.location || ''
+        });
+
+        const newLogItem = {
+          lot_number: extractedLot || '---',
+          price: extractedPrice || '---',
+          category: extractedCat || 'Geral',
+          description: extractedDesc || 'Lote ao vivo',
+          channel_name: selectedTemplateName || 'Geral',
+          status: 'Em Andamento',
+          created_at: new Date().toISOString()
+        };
+        setCurrentLog(newLogItem);
+
+        // Salva silenciosamente no backend se for lote válido
+        if (parsed.is_auction_screen && (extractedLot || extractedPrice)) {
+          fetch(`${API_BASE}/api/logs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channel_name: selectedTemplateName || 'Geral',
+              video_url: videoUrl,
+              lot_number: extractedLot || '---',
+              category: extractedCat || 'Geral',
+              description: extractedDesc || '',
+              price: extractedPrice || '---',
+              status: 'Em Andamento',
+              frame_image: imageBase64ToSend
+            })
+          }).then(r => r.json()).then(saved => {
+            if (saved?.id) {
+              fetchHistoryLogs(historyFilterChannel);
+            }
+          }).catch(e => console.warn("Erro ao registrar log no backend:", e));
+        }
+
+        // Alerta de Categoria
+        if (activeCategories && activeCategories.length > 0) {
+          const match = activeCategories.some(c => 
+            extractedCat.toLowerCase().includes(c.toLowerCase()) || 
+            extractedDesc.toLowerCase().includes(c.toLowerCase())
+          );
+          if (match) {
             setAlertActive({
-              category: data.category || 'Alerta de Lote',
+              category: extractedCat,
               time: new Date().toLocaleTimeString('pt-BR')
             });
             playAlertSound();
-          }
-        } else if (data.status === 'error') {
-          console.warn("Gemini Vision response error:", data.detail);
-          showToast(`⚠️ Gemini: ${data.detail || 'Erro na leitura'}`);
-          if (data.detail && data.detail.includes('GEMINI_API_KEY')) {
-            setShowApiKeyModal(true);
           }
         }
       } else {
@@ -982,10 +1076,11 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
 
     } catch (err) {
       console.error('Erro na varredura ao vivo:', err);
+      showToast(`⚠️ Erro na IA: ${err.message}`);
     } finally {
       isScanningRef.current = false;
     }
-  }, [engineMode, geminiApiKey, selectedTemplateName, manualImageB64, capturedFrameImage, activeCategories, API_BASE, fetchHistoryLogs, historyFilterChannel, getPlayerCurrentTimeSec]);
+  }, [engineMode, geminiApiKey, selectedTemplateName, manualImageB64, capturedFrameImage, activeCategories, API_BASE, fetchHistoryLogs, historyFilterChannel, getPlayerCurrentTimeSec, videoUrl]);
 
   // Gerencia o Agendamento Sequencial da Varredura (Evita acúmulo de requisições)
   useEffect(() => {
