@@ -841,11 +841,15 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
           .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
           .map(m => m.name.replace(/^models\//, ''));
         
-        // Prioridade 1: Modelos Flash mais recentes
+        // Prioridade 1: gemini-3.6-flash
+        const g36 = supported.find(m => m.includes('3.6-flash') || m.includes('3.6'));
+        if (g36) return g36;
+
+        // Prioridade 2: Outros modelos Flash
         const flash = supported.find(m => m.includes('flash'));
         if (flash) return flash;
 
-        // Prioridade 2: Modelos Pro ou outros Gemini
+        // Prioridade 3: Modelos Pro ou outros Gemini
         const pro = supported.find(m => m.includes('pro')) || supported.find(m => m.includes('gemini'));
         if (pro) return pro;
 
@@ -854,7 +858,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     } catch (e) {
       console.warn("Erro ao listar modelos:", e);
     }
-    return 'gemini-1.5-flash-latest';
+    return 'gemini-3.6-flash';
   };
 
   // Função para testar conexão direta com a API do Gemini
