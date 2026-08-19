@@ -461,8 +461,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       clientX = e.changedTouches[0].clientX;
       clientY = e.changedTouches[0].clientY;
     }
-    const displayX = clientX - rect.left;
-    const displayY = clientY - rect.top;
+    // Garante precisão milimétrica relativa aos limites da imagem
+    const displayX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const displayY = Math.max(0, Math.min(rect.height, clientY - rect.top));
     const scaleX = inRoomCalibWidth / rect.width;
     const scaleY = inRoomCalibHeight / rect.height;
 
@@ -2084,85 +2085,94 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
             {/* ÁREA DE DESENHO INTERATIVA (CANVAS SOBRE A IMAGEM) */}
             <div 
               style={{
-                position: 'relative', width: '100%', maxHeight: '52vh', display: 'flex', justifyContent: 'center',
+                width: '100%', maxHeight: '52vh', display: 'flex', justifyContent: 'center',
                 alignItems: 'center', background: '#000', borderRadius: '12px', overflow: 'hidden',
-                border: '2px solid rgba(99, 102, 241, 0.3)', userSelect: 'none', cursor: 'crosshair'
+                border: '2px solid rgba(99, 102, 241, 0.3)', userSelect: 'none'
               }}
-              onMouseDown={handleInRoomMouseDown}
-              onMouseMove={handleInRoomMouseMove}
-              onMouseUp={handleInRoomMouseUp}
-              onTouchStart={handleInRoomMouseDown}
-              onTouchMove={handleInRoomMouseMove}
-              onTouchEnd={handleInRoomMouseUp}
             >
-              <img 
-                ref={inRoomImgRef}
-                src={inRoomCalibImage} 
-                alt="Frame Congelado para Calibração" 
-                style={{ maxWidth: '100%', maxHeight: '52vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} 
-              />
+              <div
+                style={{
+                  position: 'relative',
+                  display: 'inline-block',
+                  lineHeight: 0,
+                  cursor: 'crosshair'
+                }}
+                onMouseDown={handleInRoomMouseDown}
+                onMouseMove={handleInRoomMouseMove}
+                onMouseUp={handleInRoomMouseUp}
+                onTouchStart={handleInRoomMouseDown}
+                onTouchMove={handleInRoomMouseMove}
+                onTouchEnd={handleInRoomMouseUp}
+              >
+                <img 
+                  ref={inRoomImgRef}
+                  src={inRoomCalibImage} 
+                  alt="Frame Congelado para Calibração" 
+                  style={{ maxWidth: '100%', maxHeight: '52vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} 
+                />
 
-              {/* RENDERIZAÇÃO DAS CAIXAS DESENHADAS */}
-              {inRoomImgRef.current && inRoomFields.map((field, idx) => {
-                const rect = inRoomImgRef.current.getBoundingClientRect();
-                const scaleX = rect.width / inRoomCalibWidth;
-                const scaleY = rect.height / inRoomCalibHeight;
+                {/* RENDERIZAÇÃO DAS CAIXAS DESENHADAS */}
+                {inRoomImgRef.current && inRoomFields.map((field, idx) => {
+                  const rect = inRoomImgRef.current.getBoundingClientRect();
+                  const scaleX = rect.width / inRoomCalibWidth;
+                  const scaleY = rect.height / inRoomCalibHeight;
 
-                const left = field.x1 * scaleX;
-                const top = field.y1 * scaleY;
-                const width = (field.x2 - field.x1) * scaleX;
-                const height = (field.y2 - field.y1) * scaleY;
+                  const left = field.x1 * scaleX;
+                  const top = field.y1 * scaleY;
+                  const width = (field.x2 - field.x1) * scaleX;
+                  const height = (field.y2 - field.y1) * scaleY;
 
-                const colors = ['#38bdf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
-                const boxColor = colors[idx % colors.length];
+                  const colors = ['#38bdf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
+                  const boxColor = colors[idx % colors.length];
 
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      position: 'absolute',
-                      left: `${left}px`,
-                      top: `${top}px`,
-                      width: `${width}px`,
-                      height: `${height}px`,
-                      border: `2px solid ${boxColor}`,
-                      background: `${boxColor}22`,
-                      pointerEvents: 'auto',
-                      zIndex: 10
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div style={{
-                      position: 'absolute', top: '-22px', left: '-2px', background: boxColor, color: '#000',
-                      fontSize: '0.68rem', fontWeight: 800, padding: '0.1rem 0.4rem', borderRadius: '4px 4px 0 0',
-                      display: 'flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap'
-                    }}>
-                      <span>{field.nome}</span>
-                      <button 
-                        onClick={() => handleInRoomDeleteField(idx)}
-                        style={{ background: 'none', border: 'none', color: '#000', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
-                      >
-                        <X size={12} />
-                      </button>
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        position: 'absolute',
+                        left: `${left}px`,
+                        top: `${top}px`,
+                        width: `${width}px`,
+                        height: `${height}px`,
+                        border: `2px solid ${boxColor}`,
+                        background: `${boxColor}22`,
+                        pointerEvents: 'auto',
+                        zIndex: 10
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div style={{
+                        position: 'absolute', top: '-22px', left: '-2px', background: boxColor, color: '#000',
+                        fontSize: '0.68rem', fontWeight: 800, padding: '0.1rem 0.4rem', borderRadius: '4px 4px 0 0',
+                        display: 'flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap', lineHeight: 'normal'
+                      }}>
+                        <span>{field.nome}</span>
+                        <button 
+                          onClick={() => handleInRoomDeleteField(idx)}
+                          style={{ background: 'none', border: 'none', color: '#000', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
 
-              {/* CAIXA ATUAL SENDO ARRASTADA */}
-              {inRoomIsDrawing && inRoomStartPoint && inRoomDragPoint && (
-                <div style={{
-                  position: 'absolute',
-                  left: `${Math.min(inRoomStartPoint.displayX, inRoomDragPoint.displayX)}px`,
-                  top: `${Math.min(inRoomStartPoint.displayY, inRoomDragPoint.displayY)}px`,
-                  width: `${Math.abs(inRoomDragPoint.displayX - inRoomStartPoint.displayX)}px`,
-                  height: `${Math.abs(inRoomDragPoint.displayY - inRoomStartPoint.displayY)}px`,
-                  border: '2px dashed #f43f5e',
-                  background: 'rgba(244, 63, 94, 0.25)',
-                  pointerEvents: 'none',
-                  zIndex: 20
-                }} />
-              )}
+                {/* CAIXA ATUAL SENDO ARRASTADA */}
+                {inRoomIsDrawing && inRoomStartPoint && inRoomDragPoint && (
+                  <div style={{
+                    position: 'absolute',
+                    left: `${Math.min(inRoomStartPoint.displayX, inRoomDragPoint.displayX)}px`,
+                    top: `${Math.min(inRoomStartPoint.displayY, inRoomDragPoint.displayY)}px`,
+                    width: `${Math.abs(inRoomDragPoint.displayX - inRoomStartPoint.displayX)}px`,
+                    height: `${Math.abs(inRoomDragPoint.displayY - inRoomStartPoint.displayY)}px`,
+                    border: '2px dashed #f43f5e',
+                    background: 'rgba(244, 63, 94, 0.25)',
+                    pointerEvents: 'none',
+                    zIndex: 20
+                  }} />
+                )}
+              </div>
             </div>
 
             {/* RESULTADOS DO TESTE DE OCR EM TEMPO REAL */}
