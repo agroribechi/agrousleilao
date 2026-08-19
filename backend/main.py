@@ -653,8 +653,16 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
                 alert_triggered = True
                 break
 
-    # Salva log no banco se for tela de leilão válida com lote ou preço
-    current_log = None
+    # Constrói log se for tela de leilão válida ou se houver dados parciais
+    current_log = {
+        "lot_number": lot_number or "---",
+        "price": price or "---",
+        "category": category or "Geral",
+        "description": desc or "Lote em transmissão",
+        "status": "Em Andamento",
+        "created_at": datetime.utcnow().isoformat()
+    }
+
     if is_auction and (lot_number or price):
         try:
             log_entry = models.AuctionLog(
@@ -669,14 +677,7 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
             db.add(log_entry)
             db.commit()
             db.refresh(log_entry)
-            current_log = {
-                "id": log_entry.id,
-                "lot_number": log_entry.lot_number,
-                "price": log_entry.price,
-                "category": log_entry.category,
-                "description": log_entry.description,
-                "created_at": log_entry.captured_at.isoformat()
-            }
+            current_log["id"] = log_entry.id
         except Exception as e:
             print(f"[Vision Log] Erro ao gravar log: {e}")
 

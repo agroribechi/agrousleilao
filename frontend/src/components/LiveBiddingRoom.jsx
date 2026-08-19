@@ -894,6 +894,12 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
             });
             playAlertSound();
           }
+        } else if (data.status === 'error') {
+          console.warn("Gemini Vision response error:", data.detail);
+          showToast(`⚠️ Gemini: ${data.detail || 'Erro na leitura'}`);
+          if (data.detail && data.detail.includes('GEMINI_API_KEY')) {
+            setShowApiKeyModal(true);
+          }
         }
       } else {
         // Modo OCR Legado com Coordenadas
@@ -1566,11 +1572,11 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
 
               {/* NÚMERO NEON GIGANTE */}
               <h2 className="neon-text-blue" style={{ fontSize: '3.2rem', fontWeight: 900, fontFamily: 'var(--font-mono)', margin: '0.1rem 0', lineHeight: 1 }}>
-                # {currentLog ? (currentLog.lot_number || '123') : '123'}
+                # {ocrData?.["Número do Lote"] || currentLog?.lot_number || (scanning ? 'Lendo...' : '---')}
               </h2>
 
               <span style={{ fontSize: '0.85rem', color: '#a7f3d0', fontWeight: 700 }}>
-                {currentLog ? (currentLog.category || 'Bezerros Nelore') : 'Bezerros Nelore'}
+                {ocrData?.["Categoria"] || currentLog?.category || (scanning ? 'Identificando...' : 'Aguardando Lote')}
               </span>
             </div>
 
@@ -1579,16 +1585,25 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
               <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '0.65rem 0.85rem', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Descrição:</span>
                 <strong style={{ fontSize: '0.88rem', color: '#f8fafc' }}>
-                  {currentLog ? (currentLog.description || 'Bezerros Nelore') : 'Bezerros Nelore'}
+                  {ocrData?.["Descrição do Lote"] || currentLog?.description || (scanning ? 'Processando transmissão...' : 'Nenhum lote detectado')}
                 </strong>
               </div>
 
               <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '0.65rem 0.85rem', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Idade / Peso:</span>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Quantidade / Peso:</span>
                 <strong style={{ fontSize: '0.88rem', color: '#cbd5e1' }}>
-                  {currentLog ? (currentLog.age || '18 meses / 450 Kg') : '18 meses / 450 Kg'}
+                  {(ocrData?.["Quantidade"] ? `${ocrData["Quantidade"]} cab. ` : '') + (ocrData?.["Peso"] ? `| ${ocrData["Peso"]}` : '') || currentLog?.age || '---'}
                 </strong>
               </div>
+
+              {ocrData?.["Vendedor"] && (
+                <div style={{ background: 'rgba(15, 23, 42, 0.5)', padding: '0.65rem 0.85rem', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Origem / Vendedor:</span>
+                  <strong style={{ fontSize: '0.88rem', color: '#38bdf8' }}>
+                    {ocrData["Vendedor"]} {ocrData["Localização"] ? `(${ocrData["Localização"]})` : ''}
+                  </strong>
+                </div>
+              )}
 
               {/* BASE DO CARD: VALOR DESTAQUE GIGANTE */}
               <div style={{
@@ -1600,7 +1615,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                   <DollarSign size={18} color="#34d399" /> Valor Atual:
                 </span>
                 <strong style={{ fontSize: '1.6rem', fontWeight: 900, color: '#34d399', fontFamily: 'var(--font-mono)' }}>
-                  {currentLog ? (currentLog.price || 'R$ 3.500,00') : 'R$ 3.500,00'} <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#a7f3d0' }}>/ Cabeça</span>
+                  {ocrData?.["Preço Atual"] || currentLog?.price || (scanning ? 'Calculando...' : 'R$ ---')}
                 </strong>
               </div>
 
