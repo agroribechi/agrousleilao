@@ -16,9 +16,9 @@ WORKDIR /app
 # Instala PyTorch CPU ultra-leve (~150MB em vez de 2.8GB com CUDA)
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# Instala dependências Python primeiro (aproveita cache de camada Docker)
+# Instala dependências Python mantendo o PyTorch CPU
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copia o código do backend
 COPY . .
