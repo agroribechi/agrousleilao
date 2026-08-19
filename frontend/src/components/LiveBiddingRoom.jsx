@@ -2724,6 +2724,10 @@ Retorne um JSON com os campos:
         </div>
       )}
 
+      {/* ELEMENTOS OCULTOS PARA PROCESSAMENTO DE VÍDEO E CAPTURA DE FRAMES */}
+      <video ref={screenVideoRef} style={{ display: 'none' }} autoPlay playsInline muted />
+      <canvas ref={hiddenCanvasRef} style={{ display: 'none' }} />
+
     </div>
   );
 }
