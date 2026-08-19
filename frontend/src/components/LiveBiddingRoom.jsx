@@ -373,13 +373,55 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
             const ctx = canvas.getContext('2d');
             ctx.drawImage(screenVideoRef.current, 0, 0);
             setCapturedRawImage(canvas.toDataURL('image/jpeg', 0.9));
-            setShowCropModal(true);
+            if (engineMode === 'ocr') {
+              setShowCropModal(true);
+            }
           }, 500);
         };
       }
       setHasScreenCapture(true);
+      showToast('📺 Transmissão vinculada com sucesso!');
     } catch (err) {
       console.error("Erro na captura de tela:", err);
+    }
+  };
+
+  // Alterna o início/parada do monitoramento com verificação automática de transmissão e chave
+  const handleToggleScanning = async () => {
+    if (!scanning) {
+      if (engineMode === 'gemini' && !geminiApiKey) {
+        setShowApiKeyModal(true);
+        showToast('⚠️ Por favor, insira sua chave gratuita do Gemini para ativar a IA.');
+        return;
+      }
+
+      if (!screenStreamRef.current && !manualImageB64) {
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { displaySurface: "browser" },
+            audio: false
+          });
+          screenStreamRef.current = stream;
+          if (screenVideoRef.current) {
+            screenVideoRef.current.srcObject = stream;
+            screenVideoRef.current.play();
+          }
+          setHasScreenCapture(true);
+          setScanning(true);
+          showToast("✨ Transmissão conectada! IA Gemini lendo ao vivo...");
+          return;
+        } catch (err) {
+          if (err.name !== "NotAllowedError") {
+            alert("Para iniciar, compartilhe a aba do leilão.");
+          }
+          return;
+        }
+      }
+      setScanning(true);
+      showToast("✨ Varredura IA iniciada!");
+    } else {
+      setScanning(false);
+      showToast("⏹️ Varredura pausada.");
     }
   };
 
@@ -1275,7 +1317,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
             
             {/* BOTÃO MONITORAR COMPACTO */}
             <button 
-              onClick={() => setScanning(!scanning)}
+              onClick={handleToggleScanning}
               className={scanning ? "btn-gradient btn-monitor-stop" : "btn-gradient btn-monitor-active"}
               style={{ padding: '0.35rem 0.85rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '8px' }}
             >
