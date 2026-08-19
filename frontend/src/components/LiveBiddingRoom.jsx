@@ -81,6 +81,10 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [printCommentText, setPrintCommentText] = useState('');
   const [capturedPrintB64, setCapturedPrintB64] = useState(null);
   const [isCapturingPrint, setIsCapturingPrint] = useState(false);
+  const [engineMode, setEngineMode] = useState('gemini'); // 'gemini' | 'ocr'
+  const [geminiStatus, setGeminiStatus] = useState(null); // 'auction' | 'ad' | null
+  const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [printLotDetails, setPrintLotDetails] = useState({
     lot_number: '',
     category: 'Geral',
@@ -785,73 +789,118 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [lastScanMs, setLastScanMs] = useState(null);
 
   // ============================================================
-  // FUNÇÃO PRINCIPAL DE VARREDURA — OTIMIZADA E NÃO-BLOQUEANTE
+  // FUNÇÃO PRINCIPAL DE VARREDURA — IA GEMINI 2.0 VISION + OCR
   // ============================================================
   const performLiveScan = useCallback(async () => {
-    if (!selectedTemplateName || isScanningRef.current) return;
+    if (isScanningRef.current) return;
     isScanningRef.current = true;
     const tStart = performance.now();
-
-    const liveMode = isLiveStreamRef.current;
-    const currentUrl = videoUrlRef.current;
-
-    // SINCRONIZAÇÃO: lê o tempo EXATO do player do YouTube
-    const currentTimeSec = getPlayerCurrentTimeSec();
-    const min = liveMode ? 0 : Math.floor(currentTimeSec / 60);
-    const sec = liveMode ? 0 : (currentTimeSec % 60);
 
     // Captura o print da tela diretamente via ScreenCapture se ativo, ou usa imagem manual
     let imageBase64ToSend = manualImageB64;
     if (screenStreamRef.current) {
       const screenCap = captureFrameFromScreen();
       if (screenCap) imageBase64ToSend = screenCap;
+    } else if (capturedFrameImage) {
+      imageBase64ToSend = capturedFrameImage;
+    }
+
+    if (!imageBase64ToSend) {
+      isScanningRef.current = false;
+      return;
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/live/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          template_name: selectedTemplateName,
-          url: currentUrl,
-          is_live: liveMode,
-          minutes: min,
-          seconds: sec,
-          filter_categories: activeCategories,
-          image_base64: imageBase64ToSend
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro na varredura.');
-
-      if (data.frame_image) setCapturedFrameImage(data.frame_image);
-      setOcrData(data.ocr_data);
-      setCurrentLog(data.current_log);
-      setHistoryLogs(data.history || []);
-      setLastScanTime(new Date());
-
-      if (data.processing_time_ms !== undefined) {
-        setLastScanMs(data.processing_time_ms);
-      } else {
-        setLastScanMs(Math.round(performance.now() - tStart));
-      }
-
-      // Dispara alerta se houver match de categoria
-      if (data.alert_triggered) {
-        setAlertActive({
-          category: data.matched_category,
-          time: new Date().toLocaleTimeString('pt-BR')
+      if (engineMode === 'gemini') {
+        const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_base64: imageBase64ToSend,
+            api_key: geminiApiKey || undefined,
+            channel_name: selectedTemplateName || 'Geral',
+            filter_categories: activeCategories
+          })
         });
-        playAlertSound();
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Erro na visão Gemini.');
+
+        if (data.status === 'success') {
+          setCapturedFrameImage(imageBase64ToSend);
+          setGeminiStatus(data.is_auction_screen ? 'auction' : 'ad');
+          setOcrData({
+            "Número do Lote": data.lot_number,
+            "Preço Atual": data.price,
+            "Descrição do Lote": data.description,
+            "Categoria": data.category,
+            "Quantidade": data.quantity,
+            "Peso": data.weight,
+            "Vendedor": data.seller,
+            "Localização": data.location
+          });
+
+          if (data.current_log) {
+            setCurrentLog(data.current_log);
+            fetchHistoryLogs(historyFilterChannel);
+          }
+
+          if (data.alert_triggered) {
+            setAlertActive({
+              category: data.category || 'Alerta de Lote',
+              time: new Date().toLocaleTimeString('pt-BR')
+            });
+            playAlertSound();
+          }
+        }
+      } else {
+        // Modo OCR Legado com Coordenadas
+        const liveMode = isLiveStreamRef.current;
+        const currentUrl = videoUrlRef.current;
+        const currentTimeSec = getPlayerCurrentTimeSec();
+        const min = liveMode ? 0 : Math.floor(currentTimeSec / 60);
+        const sec = liveMode ? 0 : (currentTimeSec % 60);
+
+        const res = await fetch(`${API_BASE}/api/live/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            template_name: selectedTemplateName || 'Geral',
+            url: currentUrl,
+            is_live: liveMode,
+            minutes: min,
+            seconds: sec,
+            filter_categories: activeCategories,
+            image_base64: imageBase64ToSend
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Erro na varredura.');
+
+        if (data.frame_image) setCapturedFrameImage(data.frame_image);
+        setOcrData(data.ocr_data);
+        setCurrentLog(data.current_log);
+        setHistoryLogs(data.history || []);
+
+        if (data.alert_triggered) {
+          setAlertActive({
+            category: data.matched_category,
+            time: new Date().toLocaleTimeString('pt-BR')
+          });
+          playAlertSound();
+        }
       }
+
+      setLastScanTime(new Date());
+      setLastScanMs(Math.round(performance.now() - tStart));
 
     } catch (err) {
       console.error('Erro na varredura ao vivo:', err);
     } finally {
       isScanningRef.current = false;
     }
-  }, [selectedTemplateName, manualImageB64, activeCategories, API_BASE, getPlayerCurrentTimeSec]);
+  }, [engineMode, geminiApiKey, selectedTemplateName, manualImageB64, capturedFrameImage, activeCategories, API_BASE, fetchHistoryLogs, historyFilterChannel, getPlayerCurrentTimeSec]);
 
   // Gerencia o Agendamento Sequencial da Varredura (Evita acúmulo de requisições)
   useEffect(() => {
@@ -1361,20 +1410,55 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                 <span>Print & Comentar</span>
               </button>
 
-              {/* BOTÃO CALIBRAÇÃO DIRETA NA SALA AO VIVO */}
-              <button 
-                onClick={handleStartInRoomCalib}
-                className="btn-gradient"
-                style={{
-                  padding: '0.3rem 0.75rem', fontSize: '0.75rem', fontWeight: 800,
-                  display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
-                }}
-                title="Congelar a tela atual e desenhar as caixas de leitura diretamente aqui na sala com 100% de precisão"
-              >
-                <Target size={14} />
-                <span>🎯 Calibrar na Tela</span>
-              </button>
+              {/* SELETOR DE MOTOR: GEMINI 2.0 VISION VS OCR */}
+              <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(15, 23, 42, 0.8)', padding: '0.2rem', borderRadius: '10px', border: '1px solid rgba(99, 102, 241, 0.3)', gap: '0.15rem' }}>
+                <button
+                  onClick={() => setEngineMode('gemini')}
+                  style={{
+                    padding: '0.25rem 0.55rem', fontSize: '0.72rem', fontWeight: 800, border: 'none', borderRadius: '7px', cursor: 'pointer',
+                    background: engineMode === 'gemini' ? 'linear-gradient(135deg, #6366f1, #a855f7)' : 'transparent',
+                    color: engineMode === 'gemini' ? '#fff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.25rem'
+                  }}
+                  title="Leitura Inteligente por Visão Computacional (Zero Calibração)"
+                >
+                  <Sparkles size={12} /> ✨ Gemini Vision
+                </button>
+                <button
+                  onClick={() => setEngineMode('ocr')}
+                  style={{
+                    padding: '0.25rem 0.55rem', fontSize: '0.72rem', fontWeight: 700, border: 'none', borderRadius: '7px', cursor: 'pointer',
+                    background: engineMode === 'ocr' ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
+                    color: engineMode === 'ocr' ? '#38bdf8' : '#94a3b8'
+                  }}
+                  title="Leitura por Caixas/Coordenadas (OCR Clássico)"
+                >
+                  OCR Caixas
+                </button>
+                <button
+                  onClick={() => setShowApiKeyModal(true)}
+                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '0.2rem 0.35rem', display: 'flex', alignItems: 'center' }}
+                  title="Configurar Chave da API Gemini"
+                >
+                  <Settings size={13} />
+                </button>
+              </div>
+
+              {/* BOTÃO CALIBRAÇÃO DIRETA NA SALA AO VIVO (SE MODO OCR ATIVO) */}
+              {engineMode === 'ocr' && (
+                <button 
+                  onClick={handleStartInRoomCalib}
+                  className="btn-gradient"
+                  style={{
+                    padding: '0.3rem 0.75rem', fontSize: '0.75rem', fontWeight: 800,
+                    display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                    boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                  }}
+                  title="Congelar a tela atual e desenhar as caixas de leitura diretamente aqui na sala"
+                >
+                  <Target size={14} />
+                  <span>🎯 Calibrar na Tela</span>
+                </button>
+              )}
 
               <label className="btn-secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                 📁 Print
@@ -2229,6 +2313,73 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CONFIGURAR GEMINI API KEY */}
+      {showApiKeyModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(5, 8, 15, 0.9)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: '#0f172a', padding: '1.75rem', borderRadius: '18px', maxWidth: '480px', width: '100%',
+            border: '1px solid rgba(99, 102, 241, 0.4)', boxShadow: '0 25px 70px rgba(0,0,0,0.9)',
+            display: 'flex', flexDirection: 'column', gap: '1.2rem'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <Sparkles size={22} color="#a855f7" />
+                <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '1.15rem', fontWeight: 800 }}>
+                  Configuração do Gemini Vision
+                </h3>
+              </div>
+              <button onClick={() => setShowApiKeyModal(false)} className="btn-secondary" style={{ padding: '0.35rem 0.55rem', borderRadius: '50%' }}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '0.85rem', color: '#94a3b8', lineHeight: 1.5 }}>
+              O <strong>Gemini 2.0 Flash Vision</strong> analisa a tela inteira do leilão e extrai lote, lance, raça e peso automaticamente, sem calibração de caixas.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#cbd5e1' }}>
+                Chave da API Gemini (Google AI Studio):
+              </label>
+              <input
+                type="password"
+                className="glass-input"
+                value={geminiApiKey}
+                onChange={(e) => setGeminiApiKey(e.target.value)}
+                placeholder="AIzaSy..."
+                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.9rem' }}
+              />
+              <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                Obtenha sua chave no <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>Google AI Studio</a>
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+              <button onClick={() => setShowApiKeyModal(false)} className="btn-secondary" style={{ padding: '0.5rem 1rem' }}>
+                Fechar
+              </button>
+              <button
+                onClick={() => {
+                  try {
+                    localStorage.setItem('gemini_api_key', geminiApiKey.trim());
+                    showToast('✨ Chave do Gemini salva com sucesso!');
+                    setShowApiKeyModal(false);
+                  } catch (e) {}
+                }}
+                className="btn-gradient"
+                style={{ padding: '0.5rem 1.25rem', fontWeight: 800 }}
+              >
+                Salvar Chave
+              </button>
+            </div>
           </div>
         </div>
       )}

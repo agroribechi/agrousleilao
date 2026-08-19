@@ -17,6 +17,7 @@ from auth import (
 from sqlalchemy.orm.attributes import flag_modified
 from stream_service import fetch_youtube_frame
 from ocr_engine import run_ocr_on_rois
+import gemini_vision
 
 # Migração de colunas e criação de tabelas no banco de dados
 def auto_migrate_schema():
@@ -117,6 +118,14 @@ class OCRTestRequest(BaseModel):
     seconds: int = 0
     image_base64: Optional[str] = None
     fields: List[Dict[str, Any]]
+
+class VisionFrameRequest(BaseModel):
+    image_base64: str
+    api_key: Optional[str] = None
+    auction_id: Optional[int] = None
+    channel_name: Optional[str] = "Geral"
+    is_live: Optional[bool] = True
+    filter_categories: Optional[List[str]] = []
 
 class TemplateCreate(BaseModel):
     name: str
@@ -608,6 +617,83 @@ def read_ocr(req: OCRTestRequest):
         "status": "success",
         "results": ocr_results,
         "debug_crops": debug_crops
+    }
+
+
+# --- ROTA DE VISÃO INTELIGENTE GEMINI 2.0 FLASH (ZERO CALIBRAÇÃO) ---
+
+@app.post("/api/vision/read-frame")
+async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_db)):
+    """
+    Recebe um frame do leilão e processa via Gemini 2.0 Flash Vision
+    sem necessidade de calibração prévia de coordenadas ou caixas.
+    """
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="Imagem em base64 não fornecida.")
+
+    res = await gemini_vision.analyze_auction_frame(req.image_base64, req.api_key)
+    if not res.get("success"):
+        return {
+            "status": "error",
+            "detail": res.get("error", "Erro ao processar visão do Gemini"),
+            "data": None
+        }
+
+    data = res.get("data", {})
+    is_auction = data.get("is_auction_screen", False)
+    lot_number = str(data.get("lot_number", "")).strip() if data.get("lot_number") is not None else ""
+    price = str(data.get("price", "")).strip() if data.get("price") is not None else ""
+    category = str(data.get("category", "Geral")).strip() if data.get("category") is not None else "Geral"
+    desc = str(data.get("description", "")).strip() if data.get("description") is not None else ""
+
+    alert_triggered = False
+    if req.filter_categories and category:
+        for cat in req.filter_categories:
+            if cat.lower() in category.lower() or cat.lower() in desc.lower():
+                alert_triggered = True
+                break
+
+    # Salva log no banco se for tela de leilão válida com lote ou preço
+    current_log = None
+    if is_auction and (lot_number or price):
+        try:
+            log_entry = models.AuctionLog(
+                auction_id=req.auction_id,
+                channel_name=req.channel_name or "Geral",
+                lot_number=lot_number or "---",
+                price=price or "---",
+                category=category or "Geral",
+                description=desc,
+                captured_at=datetime.utcnow()
+            )
+            db.add(log_entry)
+            db.commit()
+            db.refresh(log_entry)
+            current_log = {
+                "id": log_entry.id,
+                "lot_number": log_entry.lot_number,
+                "price": log_entry.price,
+                "category": log_entry.category,
+                "description": log_entry.description,
+                "created_at": log_entry.captured_at.isoformat()
+            }
+        except Exception as e:
+            print(f"[Vision Log] Erro ao gravar log: {e}")
+
+    return {
+        "status": "success",
+        "is_auction_screen": is_auction,
+        "lot_number": lot_number,
+        "price": price,
+        "category": category,
+        "description": desc,
+        "quantity": data.get("quantity", ""),
+        "weight": data.get("weight", ""),
+        "seller": data.get("seller", ""),
+        "location": data.get("location", ""),
+        "confidence": data.get("confidence", 0.95),
+        "alert_triggered": alert_triggered,
+        "current_log": current_log
     }
 
 
