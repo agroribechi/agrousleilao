@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
-# Instala ffmpeg e dependências nativas do OpenCV/EasyOCR (compatíveis com Debian 12)
+# Instala nodejs (para resolver desafios JS do YouTube), ffmpeg e dependências do OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \

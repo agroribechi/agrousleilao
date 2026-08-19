@@ -84,10 +84,10 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'socket_timeout': 15,
+            'socket_timeout': 20,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'android', 'android_creator']
+                    'player_client': ['android_vr', 'android', 'android_creator', 'ios']
                 }
             }
         }
@@ -105,8 +105,28 @@ def _resolve_stream_info(url: str) -> Optional[dict]:
                         break
 
     except Exception as e:
-        _last_diagnostic_error = f"yt-dlp: {e}"
-        print(f"[stream_service] yt-dlp erro: {e}")
+        try:
+            fallback_opts = {
+                'format': 'best/18/22',
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'socket_timeout': 20,
+            }
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl2:
+                info = ydl2.extract_info(url, download=False)
+                stream_url = info.get('url')
+                http_headers = info.get('http_headers', {})
+                if not stream_url and 'formats' in info:
+                    for fmt in reversed(info.get('formats', [])):
+                        u = fmt.get('url', '')
+                        if u:
+                            stream_url = u
+                            http_headers = fmt.get('http_headers', http_headers)
+                            break
+        except Exception as e2:
+            _last_diagnostic_error = f"yt-dlp: {e}"
+            print(f"[stream_service] yt-dlp erro: {e}")
 
     # Salva no cache
     if stream_url:
