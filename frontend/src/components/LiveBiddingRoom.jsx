@@ -105,6 +105,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [inRoomDragPoint, setInRoomDragPoint] = useState(null);
   const [inRoomIsDrawing, setInRoomIsDrawing] = useState(false);
   const [inRoomOcrResults, setInRoomOcrResults] = useState(null);
+  const [inRoomOcrCrops, setInRoomOcrCrops] = useState({});
   const [inRoomTestingOcr, setInRoomTestingOcr] = useState(false);
   const [inRoomSaving, setInRoomSaving] = useState(false);
   const [inRoomTemplateName, setInRoomTemplateName] = useState('');
@@ -451,7 +452,11 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
 
   const getInRoomClickCoords = (e) => {
     if (!inRoomImgRef.current) return null;
-    const rect = inRoomImgRef.current.getBoundingClientRect();
+    const img = inRoomImgRef.current;
+    const rect = img.getBoundingClientRect();
+    const natW = img.naturalWidth || inRoomCalibWidth || 640;
+    const natH = img.naturalHeight || inRoomCalibHeight || 360;
+
     let clientX = e.clientX;
     let clientY = e.clientY;
     if (e.touches && e.touches.length > 0) {
@@ -461,11 +466,11 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       clientX = e.changedTouches[0].clientX;
       clientY = e.changedTouches[0].clientY;
     }
-    // Garante precisão milimétrica relativa aos limites da imagem
+    // Garante precisão milimétrica aos pixels da imagem
     const displayX = Math.max(0, Math.min(rect.width, clientX - rect.left));
     const displayY = Math.max(0, Math.min(rect.height, clientY - rect.top));
-    const scaleX = inRoomCalibWidth / rect.width;
-    const scaleY = inRoomCalibHeight / rect.height;
+    const scaleX = natW / rect.width;
+    const scaleY = natH / rect.height;
 
     return {
       x: Math.round(displayX * scaleX),
@@ -473,7 +478,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       displayX,
       displayY,
       rectWidth: rect.width,
-      rectHeight: rect.height
+      rectHeight: rect.height,
+      natW,
+      natH
     };
   };
 
@@ -503,7 +510,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     const x2 = Math.max(inRoomStartPoint.x, endPoint.x);
     const y2 = Math.max(inRoomStartPoint.y, endPoint.y);
 
-    if (Math.abs(x2 - x1) < 12 || Math.abs(y2 - y1) < 12) {
+    if (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10) {
       setInRoomStartPoint(null);
       setInRoomDragPoint(null);
       return;
@@ -512,11 +519,14 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     const defaultNames = ["Número do Lote", "Preço Atual", "Descrição do Lote", "Idade / Peso"];
     const fieldName = defaultNames[inRoomFields.length] || `Campo ${inRoomFields.length + 1}`;
 
+    const natW = inRoomImgRef.current?.naturalWidth || inRoomCalibWidth || 640;
+    const natH = inRoomImgRef.current?.naturalHeight || inRoomCalibHeight || 360;
+
     const newField = {
       nome: fieldName,
       x1, y1, x2, y2,
-      ref_w: inRoomCalibWidth,
-      ref_h: inRoomCalibHeight
+      ref_w: natW,
+      ref_h: natH
     };
 
     setInRoomFields([...inRoomFields, newField]);
@@ -525,17 +535,18 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   };
 
   const handleInRoomAddPreset = (fieldType) => {
-    const w = inRoomCalibWidth;
-    const h = inRoomCalibHeight;
-    let preset = { nome: "Campo", x1: Math.round(w * 0.05), y1: Math.round(h * 0.1), x2: Math.round(w * 0.35), y2: Math.round(h * 0.25), ref_w: w, ref_h: h };
+    const natW = inRoomImgRef.current?.naturalWidth || inRoomCalibWidth || 640;
+    const natH = inRoomImgRef.current?.naturalHeight || inRoomCalibHeight || 360;
+
+    let preset = { nome: "Campo", x1: Math.round(natW * 0.05), y1: Math.round(natH * 0.1), x2: Math.round(natW * 0.35), y2: Math.round(natH * 0.25), ref_w: natW, ref_h: natH };
     if (fieldType === 'lote') {
-      preset = { nome: "Número do Lote", x1: Math.round(w * 0.04), y1: Math.round(h * 0.05), x2: Math.round(w * 0.38), y2: Math.round(h * 0.22), ref_w: w, ref_h: h };
+      preset = { nome: "Número do Lote", x1: Math.round(natW * 0.04), y1: Math.round(natH * 0.05), x2: Math.round(natW * 0.38), y2: Math.round(natH * 0.22), ref_w: natW, ref_h: natH };
     } else if (fieldType === 'preco') {
-      preset = { nome: "Preço Atual", x1: Math.round(w * 0.55), y1: Math.round(h * 0.72), x2: Math.round(w * 0.96), y2: Math.round(h * 0.92), ref_w: w, ref_h: h };
+      preset = { nome: "Preço Atual", x1: Math.round(natW * 0.55), y1: Math.round(natH * 0.72), x2: Math.round(natW * 0.96), y2: Math.round(natH * 0.92), ref_w: natW, ref_h: natH };
     } else if (fieldType === 'desc') {
-      preset = { nome: "Descrição do Lote", x1: Math.round(w * 0.04), y1: Math.round(h * 0.65), x2: Math.round(w * 0.96), y2: Math.round(h * 0.85), ref_w: w, ref_h: h };
+      preset = { nome: "Descrição do Lote", x1: Math.round(natW * 0.04), y1: Math.round(natH * 0.65), x2: Math.round(natW * 0.96), y2: Math.round(natH * 0.85), ref_w: natW, ref_h: natH };
     } else if (fieldType === 'idade') {
-      preset = { nome: "Idade / Peso", x1: Math.round(w * 0.04), y1: Math.round(h * 0.28), x2: Math.round(w * 0.45), y2: Math.round(h * 0.42), ref_w: w, ref_h: h };
+      preset = { nome: "Idade / Peso", x1: Math.round(natW * 0.04), y1: Math.round(natH * 0.28), x2: Math.round(natW * 0.45), y2: Math.round(natH * 0.42), ref_w: natW, ref_h: natH };
     }
     setInRoomFields([...inRoomFields, preset]);
     showToast(`Caixa '${preset.nome}' adicionada!`);
@@ -563,6 +574,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao testar OCR');
       setInRoomOcrResults(data.results || {});
+      setInRoomOcrCrops(data.debug_crops || {});
       showToast('🧪 OCR processado com sucesso na tela!');
     } catch (err) {
       alert(`Erro no OCR: ${err.message}`);
@@ -2113,9 +2125,15 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
 
                 {/* RENDERIZAÇÃO DAS CAIXAS DESENHADAS */}
                 {inRoomImgRef.current && inRoomFields.map((field, idx) => {
-                  const rect = inRoomImgRef.current.getBoundingClientRect();
-                  const scaleX = rect.width / inRoomCalibWidth;
-                  const scaleY = rect.height / inRoomCalibHeight;
+                  const img = inRoomImgRef.current;
+                  const rect = img.getBoundingClientRect();
+                  const natW = img.naturalWidth || inRoomCalibWidth || 640;
+                  const natH = img.naturalHeight || inRoomCalibHeight || 360;
+
+                  const refW = field.ref_w || natW;
+                  const refH = field.ref_h || natH;
+                  const scaleX = rect.width / refW;
+                  const scaleY = rect.height / refH;
 
                   const left = field.x1 * scaleX;
                   const top = field.y1 * scaleY;
@@ -2175,17 +2193,24 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
               </div>
             </div>
 
-            {/* RESULTADOS DO TESTE DE OCR EM TEMPO REAL */}
+            {/* RESULTADOS DO TESTE DE OCR EM TEMPO REAL COM PREVIEW DO RECORTE */}
             {inRoomOcrResults && (
               <div style={{ background: 'rgba(15, 23, 42, 0.8)', padding: '0.85rem', borderRadius: '10px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <Sparkles size={14} /> Leitura OCR Instantânea dos Campos:
+                <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#38bdf8', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <Sparkles size={14} /> Leitura OCR Instantânea & Imagens Recortadas:
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
                   {Object.entries(inRoomOcrResults).map(([k, v]) => (
-                    <div key={k} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '0.3rem 0.6rem', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                      <span style={{ color: '#94a3b8', fontWeight: 600 }}>{k}: </span>
-                      <strong style={{ color: v ? '#34d399' : '#f43f5e' }}>{v || '--- (vazio)'}</strong>
+                    <div key={k} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '0.45rem 0.65rem', borderRadius: '8px', fontSize: '0.8rem', border: '1px solid rgba(255, 255, 255, 0.1)', display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '130px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <span style={{ color: '#94a3b8', fontWeight: 600 }}>{k}:</span>
+                        <strong style={{ color: v ? '#34d399' : '#f43f5e' }}>{v || '---'}</strong>
+                      </div>
+                      {inRoomOcrCrops && inRoomOcrCrops[k] && (
+                        <div style={{ border: '1px solid rgba(255, 255, 255, 0.15)', borderRadius: '4px', overflow: 'hidden', background: '#000', padding: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <img src={inRoomOcrCrops[k]} alt={`Recorte de ${k}`} style={{ maxHeight: '35px', maxWidth: '100%', objectFit: 'contain' }} />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

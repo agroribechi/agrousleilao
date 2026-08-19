@@ -83,13 +83,18 @@ def clean_extracted_text(text: str, field_name: str = "") -> str:
             
     return text
 
-def run_ocr_on_rois(frame_bgr: np.ndarray, fields: List[Dict[str, Any]]) -> Dict[str, str]:
+def run_ocr_on_rois(
+    frame_bgr: np.ndarray, 
+    fields: List[Dict[str, Any]], 
+    bypass_cache: bool = False,
+    return_crops: bool = False
+) -> Any:
     """
-    Executa OCR ultrarrápido por ROI com Cache Inteligente por Hash de Imagem.
-    Se o recorte do campo não mudou em relação à varredura anterior, responde em 0ms.
+    Executa OCR ultrarrápido por ROI com suporte a Cache Inteligente e visualização de recortes para debug.
     """
     reader = get_ocr_reader()
     results = {}
+    crops = {}
     h_frame, w_frame = frame_bgr.shape[:2]
     now = time.time()
 
@@ -127,17 +132,29 @@ def run_ocr_on_rois(frame_bgr: np.ndarray, fields: List[Dict[str, Any]]) -> Dict
         roi = frame_bgr[y1:y2, x1:x2]
         if roi.size == 0:
             results[nome] = ""
+            if return_crops:
+                crops[nome] = ""
             continue
 
-        # 1. Hashing e checagem de Cache (0ms se campo estático)
+        if return_crops:
+            try:
+                import base64
+                _, buffer = cv2.imencode('.jpg', roi)
+                b64_str = base64.b64encode(buffer).decode('utf-8')
+                crops[nome] = f"data:image/jpeg;base64,{b64_str}"
+            except Exception:
+                crops[nome] = ""
+
+        # 1. Hashing e checagem de Cache (0ms se campo estático e bypass_cache=False)
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         crop_hash = compute_crop_hash(gray_roi)
         cache_key = f"{nome}_{x1}_{y1}_{x2}_{y2}"
 
-        cached = _roi_cache.get(cache_key)
-        if cached and cached["hash"] == crop_hash and (now - cached["timestamp"]) < _CACHE_TTL:
-            results[nome] = cached["result"]
-            continue
+        if not bypass_cache:
+            cached = _roi_cache.get(cache_key)
+            if cached and cached["hash"] == crop_hash and (now - cached["timestamp"]) < _CACHE_TTL:
+                results[nome] = cached["result"]
+                continue
 
         # 2. Processamento de Imagem
         processed_roi = preprocess_crop(roi, field_name=nome)
@@ -176,5 +193,7 @@ def run_ocr_on_rois(frame_bgr: np.ndarray, fields: List[Dict[str, Any]]) -> Dict
             "timestamp": now
         }
 
+    if return_crops:
+        return results, crops
     return results
 

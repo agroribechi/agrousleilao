@@ -603,10 +603,11 @@ def read_ocr(req: OCRTestRequest):
     if frame_bgr is None:
         raise HTTPException(status_code=400, detail="Nenhuma imagem ou URL fornecida.")
 
-    ocr_results = run_ocr_on_rois(frame_bgr, req.fields)
+    ocr_results, debug_crops = run_ocr_on_rois(frame_bgr, req.fields, bypass_cache=True, return_crops=True)
     return {
         "status": "success",
-        "results": ocr_results
+        "results": ocr_results,
+        "debug_crops": debug_crops
     }
 
 
