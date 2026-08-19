@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Instala PyTorch CPU ultra-leve (~150MB em vez de 2.8GB com CUDA)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 # Instala dependências Python primeiro (aproveita cache de camada Docker)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Pré-carrega modelo EasyOCR no build (evita download de ~100MB na primeira request)
-RUN python -c "import easyocr; easyocr.Reader(['pt'], gpu=False)"
 
 # Copia o código do backend
 COPY . .
