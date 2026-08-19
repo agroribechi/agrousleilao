@@ -18,6 +18,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from stream_service import fetch_youtube_frame
 from ocr_engine import run_ocr_on_rois
 import gemini_vision
+import vps_client
 
 # Migração de colunas e criação de tabelas no banco de dados
 def auto_migrate_schema():
@@ -1025,6 +1026,222 @@ def delete_auction_log(log_id: int, db: Session = Depends(get_db)):
     db.delete(log)
     db.commit()
     return {"status": "success"}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROTAS DO ADMIN LOCAL — Captura + Gemini Vision + Push para VPS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class LocalProcessRequest(BaseModel):
+    """Requisição do painel admin para capturar um frame e enviar dados para a VPS."""
+    url: Optional[str] = None
+    template_name: str
+    minutes: int = 0
+    seconds: int = 0
+    is_live: bool = True
+    filter_categories: List[str] = []
+    image_base64: Optional[str] = None   # Frame já capturado pelo frontend
+    auction_id: Optional[int] = None
+    api_key: Optional[str] = None
+    use_gemini: bool = True              # True = Gemini Vision; False = EasyOCR (legado)
+
+class PushAuctionToVpsRequest(BaseModel):
+    auction_id: int  # ID do leilão local para sincronizar com VPS
+
+class PushAccessToVpsRequest(BaseModel):
+    auction_id: int
+    user_emails: List[str]
+
+
+@app.post("/api/local/process")
+async def local_process(
+    req: LocalProcessRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    ─── ROTA PRINCIPAL DO ADMIN LOCAL ───
+    1. Captura frame (ffmpeg/yt-dlp — roda na máquina local, não na VPS)
+    2. Processa via Gemini Vision (HTTP) ou EasyOCR (fallback)
+    3. Envia dados processados para a VPS via vps_client
+    4. Retorna resultado para o painel admin
+    """
+    import time, re
+    t_start = time.time()
+
+    # ── 1. Obter o frame ──────────────────────────────────────────────────────
+    frame_bgr = None
+    frame_b64 = ""
+
+    if req.image_base64:
+        try:
+            raw_b64 = req.image_base64.split(",")[-1]
+            img_bytes = base64.b64decode(raw_b64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            frame_b64 = req.image_base64
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Erro ao decodificar imagem: {e}")
+    elif req.url:
+        frame_bgr, frame_b64, msg = fetch_youtube_frame(
+            req.url, req.minutes, req.seconds, is_live=req.is_live
+        )
+        if frame_bgr is None:
+            raise HTTPException(status_code=400, detail=f"Não foi possível capturar frame: {msg}")
+    else:
+        raise HTTPException(status_code=400, detail="Forneça image_base64 ou url.")
+
+    # ── 2. Processar via Gemini Vision (padrão) ou EasyOCR (legado) ──────────
+    lot_number = ""
+    price = ""
+    description = ""
+    category = "Geral"
+    age = ""
+    ocr_data = {}
+    alert_triggered = False
+    matched_category = ""
+
+    if req.use_gemini:
+        res = await gemini_vision.analyze_auction_frame(frame_b64, req.api_key)
+        if res.get("success"):
+            data = res.get("data", {})
+            lot_number = str(data.get("lot_number", "")).strip()
+            price = str(data.get("price", "")).strip()
+            description = str(data.get("description", "")).strip()
+            category = str(data.get("category", "Geral")).strip()
+            age = str(data.get("weight", "")).strip()
+            ocr_data = data
+        else:
+            # Fallback para EasyOCR se Gemini falhar
+            template = db.query(models.Template).filter(
+                models.Template.name == req.template_name
+            ).first()
+            if template:
+                ocr_data = run_ocr_on_rois(frame_bgr, template.fields)
+                for k, v in ocr_data.items():
+                    k_lower = k.lower()
+                    if any(l in k_lower for l in ["lote", "lot", "nº", "num"]):
+                        lot_number = re.sub(r'^(lote|lot|nº|num|#)\s*', '', v.strip(), flags=re.IGNORECASE)
+                    elif "desc" in k_lower or "animal" in k_lower:
+                        description = v.strip()
+                    elif "idade" in k_lower or "peso" in k_lower:
+                        age = v.strip()
+                    elif any(p in k_lower for p in ["preç", "preco", "valor", "lance"]):
+                        price = v.strip()
+    else:
+        # Modo EasyOCR direto
+        template = db.query(models.Template).filter(
+            models.Template.name == req.template_name
+        ).first()
+        if not template:
+            raise HTTPException(status_code=404, detail=f"Template '{req.template_name}' não encontrado.")
+        ocr_data = run_ocr_on_rois(frame_bgr, template.fields)
+        for k, v in ocr_data.items():
+            k_lower = k.lower()
+            if any(l in k_lower for l in ["lote", "lot", "nº", "num"]):
+                lot_number = re.sub(r'^(lote|lot|nº|num|#)\s*', '', v.strip(), flags=re.IGNORECASE)
+            elif "desc" in k_lower or "animal" in k_lower:
+                description = v.strip()
+            elif "idade" in k_lower or "peso" in k_lower:
+                age = v.strip()
+            elif any(p in k_lower for p in ["preç", "preco", "valor", "lance"]):
+                price = v.strip()
+
+    # ── Verificar alerta de categoria ─────────────────────────────────────────
+    full_text = f"{lot_number} {description} {category}".lower()
+    for cat in req.filter_categories:
+        if cat.strip() and cat.strip().lower() in full_text:
+            alert_triggered = True
+            matched_category = cat.strip()
+            break
+
+    # ── 3. Enviar para a VPS ──────────────────────────────────────────────────
+    # Thumbnail comprimido para economizar banda
+    thumb_b64 = ""
+    try:
+        _, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        thumb_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+    except Exception:
+        pass
+
+    vps_result = await vps_client.push_frame_data(
+        template_name=req.template_name,
+        ocr_data=ocr_data,
+        lot_number=lot_number,
+        price=price,
+        description=description,
+        category=category,
+        age=age,
+        frame_image=thumb_b64,
+        auction_id=req.auction_id,
+        video_url=req.url,
+        filter_categories=req.filter_categories,
+        alert_triggered=alert_triggered,
+        matched_category=matched_category
+    )
+
+    elapsed_ms = int((time.time() - t_start) * 1000)
+
+    return {
+        "status": "success",
+        "frame_image": thumb_b64,
+        "ocr_data": ocr_data,
+        "lot_number": lot_number,
+        "price": price,
+        "description": description,
+        "category": category,
+        "age": age,
+        "alert_triggered": alert_triggered,
+        "matched_category": matched_category,
+        "vps_push": vps_result,
+        "processing_time_ms": elapsed_ms
+    }
+
+
+@app.post("/api/local/push-auction")
+async def push_auction_to_vps(
+    req: PushAuctionToVpsRequest,
+    db: Session = Depends(get_db)
+):
+    """Sincroniza um leilão do banco local para a VPS."""
+    auction = db.query(models.Auction).filter(models.Auction.id == req.auction_id).first()
+    if not auction:
+        raise HTTPException(status_code=404, detail="Leilão não encontrado no banco local.")
+
+    auction_data = {
+        "title": auction.title,
+        "description": auction.description,
+        "start_date": auction.start_date.isoformat(),
+        "status": auction.status,
+        "logo_url": auction.logo_url,
+        "banner_url": auction.banner_url,
+        "auctioneer_name": auction.auctioneer_name,
+        "address_street": auction.address_street,
+        "address_city": auction.address_city,
+        "address_state": auction.address_state,
+        "address_zip": auction.address_zip,
+        "phone_primary": auction.phone_primary,
+        "phone_whatsapp": auction.phone_whatsapp,
+        "website_url": auction.website_url,
+        "social_instagram": auction.social_instagram,
+        "payment_status": auction.payment_status,
+        "plan_tier": auction.plan_tier,
+    }
+    result = await vps_client.push_auction(auction_data)
+    return result
+
+
+@app.post("/api/local/push-access")
+async def push_access_to_vps(req: PushAccessToVpsRequest):
+    """Define acesso de clientes (por email) a um leilão na VPS."""
+    result = await vps_client.push_client_access(req.auction_id, req.user_emails)
+    return result
+
+
+@app.get("/api/vps/status")
+def check_vps_status():
+    """Verifica se a VPS está acessível e retorna status da conexão."""
+    status = vps_client.get_vps_status()
+    return status
+
 
 if __name__ == "__main__":
     import uvicorn
