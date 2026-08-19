@@ -85,6 +85,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const [geminiStatus, setGeminiStatus] = useState(null); // 'auction' | 'ad' | null
   const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [showKeyPassword, setShowKeyPassword] = useState(false);
+  const [testingKeyStatus, setTestingKeyStatus] = useState(null);
+  const [testingKeyMsg, setTestingKeyMsg] = useState('');
   const [printLotDetails, setPrintLotDetails] = useState({
     lot_number: '',
     category: 'Geral',
@@ -827,6 +830,40 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     }
   };
 
+  // Função para testar conexão com a API do Gemini
+  const handleTestApiKey = async () => {
+    if (!geminiApiKey.trim()) {
+      setTestingKeyStatus('invalid');
+      setTestingKeyMsg('Por favor, digite ou cole sua chave antes de testar.');
+      return;
+    }
+    setTestingKeyStatus('testing');
+    setTestingKeyMsg('Testando comunicação com Google Gemini 2.0 Flash...');
+    try {
+      const dummyB64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_base64: dummyB64,
+          api_key: geminiApiKey.trim()
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success' || data.is_auction_screen !== undefined) {
+        setTestingKeyStatus('valid');
+        setTestingKeyMsg('✅ Chave Válida! Conectada com sucesso ao Gemini 2.0 Flash.');
+        localStorage.setItem('gemini_api_key', geminiApiKey.trim());
+      } else {
+        setTestingKeyStatus('invalid');
+        setTestingKeyMsg(`❌ Erro: ${data.detail || 'Chave rejeitada pela API do Google'}`);
+      }
+    } catch (e) {
+      setTestingKeyStatus('invalid');
+      setTestingKeyMsg(`❌ Erro de conexão: ${e.message}`);
+    }
+  };
+
   const isScanningRef = useRef(false);
   const [lastScanMs, setLastScanMs] = useState(null);
 
@@ -1483,11 +1520,32 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
                   OCR Caixas
                 </button>
                 <button
-                  onClick={() => setShowApiKeyModal(true)}
-                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '0.2rem 0.35rem', display: 'flex', alignItems: 'center' }}
-                  title="Configurar Chave da API Gemini"
+                  type="button"
+                  onClick={() => {
+                    const saved = localStorage.getItem('gemini_api_key') || '';
+                    setGeminiApiKey(saved);
+                    setTestingKeyStatus(null);
+                    setTestingKeyMsg('');
+                    setShowApiKeyModal(true);
+                  }}
+                  className="btn-secondary"
+                  style={{
+                    padding: '0.2rem 0.5rem',
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    color: '#38bdf8',
+                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    background: 'rgba(56, 189, 248, 0.15)',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    borderRadius: '6px'
+                  }}
+                  title="Conferir ou alterar chave da API Gemini"
                 >
-                  <Settings size={13} />
+                  <Settings size={13} color="#38bdf8" />
+                  <span>⚙️ Chave</span>
                 </button>
               </div>
 
@@ -2382,7 +2440,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
           padding: '1rem'
         }}>
           <div style={{
-            background: '#0f172a', padding: '1.75rem', borderRadius: '18px', maxWidth: '480px', width: '100%',
+            background: '#0f172a', padding: '1.75rem', borderRadius: '18px', maxWidth: '520px', width: '100%',
             border: '1px solid rgba(99, 102, 241, 0.4)', boxShadow: '0 25px 70px rgba(0,0,0,0.9)',
             display: 'flex', flexDirection: 'column', gap: '1.2rem'
           }}>
@@ -2390,7 +2448,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                 <Sparkles size={22} color="#a855f7" />
                 <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '1.15rem', fontWeight: 800 }}>
-                  Configuração do Gemini Vision
+                  Configuração da Chave Gemini Vision
                 </h3>
               </div>
               <button onClick={() => setShowApiKeyModal(false)} className="btn-secondary" style={{ padding: '0.35rem 0.55rem', borderRadius: '50%' }}>
@@ -2399,24 +2457,68 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
             </div>
 
             <p style={{ margin: 0, fontSize: '0.85rem', color: '#94a3b8', lineHeight: 1.5 }}>
-              O <strong>Gemini 2.0 Flash Vision</strong> analisa a tela inteira do leilão e extrai lote, lance, raça e peso automaticamente, sem calibração de caixas.
+              O <strong>Gemini 2.0 Flash Vision</strong> lê automaticamente o lote, lance, raça e peso da transmissão sem necessidade de desenhar caixas.
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#cbd5e1' }}>
-                Chave da API Gemini (Google AI Studio):
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#cbd5e1', display: 'flex', justifyContent: 'space-between' }}>
+                <span>Chave da API Gemini (Google AI Studio):</span>
+                <span style={{ fontSize: '0.72rem', color: geminiApiKey ? '#34d399' : '#f43f5e' }}>
+                  {geminiApiKey ? '● Chave configurada' : '○ Nenhuma chave salva'}
+                </span>
               </label>
-              <input
-                type="password"
-                className="glass-input"
-                value={geminiApiKey}
-                onChange={(e) => setGeminiApiKey(e.target.value)}
-                placeholder="AIzaSy..."
-                style={{ width: '100%', padding: '0.65rem 0.85rem', fontSize: '0.9rem' }}
-              />
-              <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                Obtenha sua chave no <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>Google AI Studio</a>
-              </span>
+              
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  type={showKeyPassword ? "text" : "password"}
+                  className="glass-input"
+                  value={geminiApiKey}
+                  onChange={(e) => {
+                    setGeminiApiKey(e.target.value);
+                    setTestingKeyStatus(null);
+                    setTestingKeyMsg('');
+                  }}
+                  placeholder="AIzaSy..."
+                  style={{ width: '100%', padding: '0.65rem 2.5rem 0.65rem 0.85rem', fontSize: '0.9rem', fontFamily: 'var(--font-mono)' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKeyPassword(!showKeyPassword)}
+                  style={{
+                    position: 'absolute', right: '0.65rem', background: 'none', border: 'none',
+                    color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center'
+                  }}
+                  title={showKeyPassword ? "Ocultar chave" : "Mostrar chave"}
+                >
+                  {showKeyPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.2rem' }}>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                  Obtenha sua chave gratuita em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>Google AI Studio</a>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleTestApiKey}
+                  disabled={testingKeyStatus === 'testing'}
+                  className="btn-secondary"
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.4)' }}
+                >
+                  {testingKeyStatus === 'testing' ? 'Testando...' : '🧪 Testar Chave'}
+                </button>
+              </div>
+
+              {testingKeyMsg && (
+                <div style={{
+                  padding: '0.5rem 0.75rem', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 600,
+                  background: testingKeyStatus === 'valid' ? 'rgba(16, 185, 129, 0.15)' : (testingKeyStatus === 'testing' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(244, 63, 94, 0.15)'),
+                  color: testingKeyStatus === 'valid' ? '#34d399' : (testingKeyStatus === 'testing' ? '#38bdf8' : '#f87171'),
+                  border: `1px solid ${testingKeyStatus === 'valid' ? 'rgba(16, 185, 129, 0.3)' : (testingKeyStatus === 'testing' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(244, 63, 94, 0.3)')}`
+                }}>
+                  {testingKeyMsg}
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
