@@ -830,6 +830,33 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     }
   };
 
+  // Função para descobrir dinamicamente o modelo suportado pela conta do usuário
+  const getOrDiscoverGeminiModel = async (key) => {
+    try {
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+      if (listRes.ok) {
+        const data = await listRes.json();
+        const models = data.models || [];
+        const supported = models
+          .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+          .map(m => m.name.replace(/^models\//, ''));
+        
+        // Prioridade 1: Modelos Flash mais recentes
+        const flash = supported.find(m => m.includes('flash'));
+        if (flash) return flash;
+
+        // Prioridade 2: Modelos Pro ou outros Gemini
+        const pro = supported.find(m => m.includes('pro')) || supported.find(m => m.includes('gemini'));
+        if (pro) return pro;
+
+        if (supported.length > 0) return supported[0];
+      }
+    } catch (e) {
+      console.warn("Erro ao listar modelos:", e);
+    }
+    return 'gemini-1.5-flash-latest';
+  };
+
   // Função para testar conexão direta com a API do Gemini
   const handleTestApiKey = async () => {
     const key = geminiApiKey.trim();
@@ -839,9 +866,12 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       return;
     }
     setTestingKeyStatus('testing');
-    setTestingKeyMsg('Testando comunicação direta com Google Gemini 1.5 Flash...');
+    setTestingKeyMsg('Identificando modelos disponíveis na sua conta Google...');
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+      const modelName = await getOrDiscoverGeminiModel(key);
+      setTestingKeyMsg(`Conectando com modelo '${modelName}'...`);
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`;
       const payload = {
         contents: [
           {
@@ -856,8 +886,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       });
       if (res.ok) {
         setTestingKeyStatus('valid');
-        setTestingKeyMsg('✅ Chave Válida! Conexão direta com Gemini 1.5 Flash estabelecida com sucesso.');
+        setTestingKeyMsg(`✅ Chave Válida! Conectada com sucesso usando o modelo '${modelName}'.`);
         localStorage.setItem('gemini_api_key', key);
+        localStorage.setItem('gemini_selected_model', modelName);
       } else {
         const errJson = await res.json().catch(() => ({}));
         const msg = errJson.error?.message || `Erro HTTP ${res.status}`;
@@ -905,6 +936,8 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
           return;
         }
 
+        const modelName = localStorage.getItem('gemini_selected_model') || await getOrDiscoverGeminiModel(key);
+
         const cleanB64 = imageBase64ToSend.includes(',') ? imageBase64ToSend.split(',')[1] : imageBase64ToSend;
         let mimeType = 'image/jpeg';
         if (imageBase64ToSend.includes('image/png')) mimeType = 'image/png';
@@ -948,7 +981,7 @@ Retorne um JSON com os campos:
           }
         };
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
