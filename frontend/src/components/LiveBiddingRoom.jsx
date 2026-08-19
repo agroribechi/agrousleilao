@@ -10,6 +10,14 @@ import {
 
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
+import Hls from 'hls.js';
+
+export const LIVE_AUCTION_CHANNELS = [
+  { id: 'canaldoboi', name: '🐂 Canal do Boi (Ao Vivo)', url: 'https://sba1.fabricahost.com.br/canaldoboi/index.m3u8', type: 'hls' },
+  { id: 'agrocanal', name: '🌾 Agro Canal (Ao Vivo)', url: 'https://sba1.fabricahost.com.br/agrocanal/index.m3u8', type: 'hls' },
+  { id: 'canalrural', name: '🚜 Canal Rural (Ao Vivo)', url: 'https://canalrural.fabricahost.com.br/canalrural/index.m3u8', type: 'hls' },
+  { id: 'terraviva', name: '🌱 Terra Viva (Ao Vivo)', url: 'https://evp.band.uol.com.br/terraviva/terraviva/playlist.m3u8', type: 'hls' },
+];
 
 const PRESET_CATEGORIES = [
   'Bezerros', 'Novilhas', 'Nelore', 'Matrizes', 'Boi Gordo', 'Garrotes', 'Cruzado'
@@ -123,6 +131,65 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
   const screenVideoRef = useRef(null);
   const hiddenCanvasRef = useRef(null);
   const screenStreamRef = useRef(null);
+  const nativeVideoRef = useRef(null);
+  const hlsInstanceRef = useRef(null);
+  const [streamType, setStreamType] = useState('hls'); // 'hls' | 'youtube'
+
+  // ---------- REPRODUÇÃO NATIVA HLS (CANAL DO BOI, CANAL RURAL, TERRA VIVA, ETC.) ----------
+  useEffect(() => {
+    const isHls = videoUrl && (videoUrl.includes('.m3u8') || videoUrl.includes('.mp4'));
+    if (isHls && nativeVideoRef.current) {
+      setStreamType('hls');
+      if (Hls.isSupported()) {
+        if (hlsInstanceRef.current) {
+          hlsInstanceRef.current.destroy();
+        }
+        const hls = new Hls({ enableWorker: true });
+        hls.loadSource(videoUrl);
+        hls.attachMedia(nativeVideoRef.current);
+        hlsInstanceRef.current = hls;
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          nativeVideoRef.current.play().catch(() => {});
+        });
+      } else if (nativeVideoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+        nativeVideoRef.current.src = videoUrl;
+        nativeVideoRef.current.play().catch(() => {});
+      }
+    } else {
+      if (videoUrl && extractYouTubeVideoId(videoUrl)) {
+        setStreamType('youtube');
+      }
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+    }
+  }, [videoUrl]);
+
+  // ---------- SUPORTE A COLAR PRINT COM CTRL + V ----------
+  useEffect(() => {
+    const handlePaste = async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const blob = items[i].getAsFile();
+          const reader = new FileReader();
+          reader.onload = async (event) => {
+            const b64 = event.target.result;
+            setManualImageB64(b64);
+            setCapturedFrameImage(b64);
+            setViewMode('frame');
+            showToast('📸 Print colado! Processando com IA Gemini 3.6 Flash...');
+          };
+          reader.readAsDataURL(blob);
+          break;
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, []);
 
   // ---------- YOUTUBE IFRAME PLAYER API ----------
 
@@ -916,9 +983,21 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     isScanningRef.current = true;
     const tStart = performance.now();
 
-    // Captura o print da tela diretamente via ScreenCapture se ativo, ou usa imagem manual
+    // 1. Captura direta do Vídeo Nativo HLS (Canal do Boi, Canal Rural, etc.)
     let imageBase64ToSend = manualImageB64;
-    if (screenStreamRef.current) {
+    if (nativeVideoRef.current && nativeVideoRef.current.videoWidth > 0 && !nativeVideoRef.current.paused) {
+      try {
+        const video = nativeVideoRef.current;
+        const canvas = hiddenCanvasRef.current || document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        imageBase64ToSend = canvas.toDataURL('image/jpeg', 0.85);
+      } catch (e) {
+        console.warn("Erro ao capturar frame nativo HLS:", e);
+      }
+    } else if (screenStreamRef.current) {
       const screenCap = captureFrameFromScreen();
       if (screenCap) imageBase64ToSend = screenCap;
     } else if (capturedFrameImage) {
@@ -1705,20 +1784,61 @@ Retorne um JSON com os campos:
             </div>
           </div>
 
+          {/* SELETOR DE CANAIS AO VIVO EM ALTA DEFINIÇÃO */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(15, 23, 42, 0.6)', padding: '0.4rem 0.6rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+            <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              📡 Canais Ao Vivo:
+            </span>
+            {LIVE_AUCTION_CHANNELS.map(ch => (
+              <button
+                key={ch.id}
+                onClick={() => {
+                  setVideoUrl(ch.url);
+                  setSelectedTemplateName(ch.name.replace(/^[^\w]+/, '').trim());
+                  showToast(`📡 Conectando a ${ch.name}...`);
+                }}
+                className="btn-secondary"
+                style={{
+                  padding: '0.25rem 0.55rem', fontSize: '0.72rem', fontWeight: 700,
+                  background: videoUrl === ch.url ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
+                  color: videoUrl === ch.url ? '#38bdf8' : '#cbd5e1',
+                  borderColor: videoUrl === ch.url ? '#38bdf8' : 'rgba(255,255,255,0.1)'
+                }}
+              >
+                {ch.name}
+              </button>
+            ))}
+          </div>
+
           {/* CONTAINER DO PLAYER DE VÍDEO DE COM BORDAS ARREDONDADAS */}
           <div className="responsive-video-container" style={{ position: 'relative', width: '100%', paddingTop: '56.25%', borderRadius: '14px', overflow: 'hidden', background: '#000', border: '1px solid var(--border-subtle)' }}>
-            {/* YouTube IFrame Player API */}
-            <div style={{
-              position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-              display: (viewMode === 'player' && currentVideoId) ? 'block' : 'none'
-            }}>
-              <div id="yt-player-container" style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }} />
-            </div>
+            
+            {/* 1. Player Nativo HLS (.m3u8) para Canal do Boi, Canal Rural, Terra Viva, etc. */}
+            {streamType === 'hls' && (
+              <video
+                ref={nativeVideoRef}
+                controls
+                autoPlay
+                playsInline
+                crossOrigin="anonymous"
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: viewMode === 'player' ? 'block' : 'none' }}
+              />
+            )}
 
-            {viewMode === 'player' && !currentVideoId && (
+            {/* 2. YouTube IFrame Player API */}
+            {streamType === 'youtube' && (
+              <div style={{
+                position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+                display: (viewMode === 'player' && currentVideoId) ? 'block' : 'none'
+              }}>
+                <div id="yt-player-container" style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }} />
+              </div>
+            )}
+
+            {viewMode === 'player' && streamType === 'youtube' && !currentVideoId && !videoUrl && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', gap: '0.5rem' }}>
                 <Tv size={40} style={{ opacity: 0.4 }} />
-                <span>Insira um link do YouTube para carregar o Player</span>
+                <span>Escolha um Canal Ao Vivo acima ou cole um link do leilão</span>
               </div>
             )}
 
@@ -1733,7 +1853,22 @@ Retorne um JSON com os campos:
             {viewMode === 'frame' && !capturedFrameImage && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', gap: '0.5rem' }}>
                 <Camera size={40} style={{ opacity: 0.4 }} />
-                <span>Inicie o monitoramento para visualizar os frames da IA</span>
+                <span>Inicie o monitoramento ou cole um print com Ctrl+V</span>
+              </div>
+            )}
+
+            {/* PIP / MINIATURA DO FRAME SENDO LIDO PELA IA */}
+            {capturedFrameImage && viewMode === 'player' && (
+              <div style={{
+                position: 'absolute', bottom: '12px', right: '12px', zIndex: 30,
+                width: '120px', height: '68px', borderRadius: '8px', overflow: 'hidden',
+                border: '2px solid #38bdf8', boxShadow: '0 4px 14px rgba(0,0,0,0.8)',
+                background: '#000'
+              }}>
+                <img src={capturedFrameImage} alt="Visão da IA" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '0.55rem', fontWeight: 800, color: '#34d399', background: 'rgba(0,0,0,0.7)', padding: '1px 3px', borderRadius: '3px' }}>
+                  ● IA Lendo
+                </div>
               </div>
             )}
           </div>
