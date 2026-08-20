@@ -1028,6 +1028,49 @@ def delete_auction_log(log_id: int, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ROTA DE TESTE DE OCR / CALIBRAÇÃO DE CAMPOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class OcrReadRequest(BaseModel):
+    image_base64: str
+    fields: List[Dict[str, Any]]
+    return_crops: bool = True
+
+@app.post("/api/ocr/read")
+def read_ocr_fields(req: OcrReadRequest):
+    """
+    Executa OCR sobre as regiões calibradas (ROIs) enviadas pelo frontend.
+    Usado no Calibrador e no teste em tempo real.
+    """
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="Imagem não fornecida.")
+    if not req.fields:
+        raise HTTPException(status_code=400, detail="Nenhum campo fornecido para leitura.")
+
+    try:
+        raw_b64 = req.image_base64.split(",")[-1]
+        img_bytes = base64.b64decode(raw_b64)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame_bgr is None:
+            raise ValueError("Falha ao decodificar imagem.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao processar imagem base64: {e}")
+
+    results, crops = run_ocr_on_rois(
+        frame_bgr,
+        req.fields,
+        bypass_cache=True,
+        return_crops=True
+    )
+
+    return {
+        "status": "success",
+        "results": results,
+        "debug_crops": crops
+    }
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROTAS DO ADMIN LOCAL — Captura + Gemini Vision + Push para VPS
 # ══════════════════════════════════════════════════════════════════════════════
 

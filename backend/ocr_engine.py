@@ -14,53 +14,67 @@ try:
 except Exception:
     pass
 
-# Instância singleton do EasyOCR para alta performance
+# Instância singleton do EasyOCR
 _reader = None
-_roi_cache: Dict[str, Dict[str, Any]] = {}  # { field_key: { "hash": ..., "result": ..., "timestamp": ... } }
-_CACHE_TTL = 30  # Tempo máximo de vida do cache por ROI em segundos
+_roi_cache: Dict[str, Dict[str, Any]] = {}
+_CACHE_TTL = 15  # Segundos
 
 def get_ocr_reader():
     global _reader
     if _reader is None:
-        _reader = easyocr.Reader(['pt'], gpu=False)
+        print("[OCR ENGINE] Inicializando EasyOCR pt/en...")
+        _reader = easyocr.Reader(['pt', 'en'], gpu=False, verbose=False)
     return _reader
 
 def compute_crop_hash(gray_img: np.ndarray) -> str:
-    """Calcula um hash ultra-rápido de 16x16 pixels para comparar se o recorte mudou."""
     if gray_img is None or gray_img.size == 0:
         return ""
     small = cv2.resize(gray_img, (16, 16), interpolation=cv2.INTER_NEAREST)
     return hashlib.md5(small.tobytes()).hexdigest()
 
-def preprocess_crop(roi_bgr: np.ndarray, field_name: str = "") -> np.ndarray:
+def enhance_roi_for_ocr(roi_bgr: np.ndarray) -> List[np.ndarray]:
     """
-    Pré-processa e otimiza o recorte para OCR super-rápido:
-    - Normaliza a altura para 56px (redução massiva do tempo de convolução CPU)
-    - Converte para escala de cinza e aplica contraste adaptativo suave
+    Gera variações otimizadas do recorte para garantir leitura em qualquer fundo
+    (fundo amarelo, azul, branco, preto de transmissão de TV).
     """
     if roi_bgr is None or roi_bgr.size == 0:
-        return roi_bgr
+        return []
 
-    # Converte para escala de cinza
-    gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape[:2]
+    h, w = roi_bgr.shape[:2]
+    variants = []
 
-    # Normaliza altura para 56px para aceleração máxima em CPU
-    target_h = 56
-    if h > 0 and w > 0:
-        scale = target_h / float(h)
-        new_w = max(16, int(w * scale))
-        gray = cv2.resize(gray, (new_w, target_h), interpolation=cv2.INTER_AREA)
+    # 1. Upscale se o recorte for pequeno (fontes de TV precisam de altura >= 80px)
+    scale = 1.0
+    if h < 80:
+        scale = max(2.0, 80.0 / float(h))
+    elif h > 400:
+        scale = 300.0 / float(h)
 
-    # Realce de contraste adaptativo suave
-    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(4, 4))
-    enhanced = clahe.apply(gray)
-    return enhanced
+    if scale != 1.0:
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        resized_bgr = cv2.resize(roi_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    else:
+        resized_bgr = roi_bgr.copy()
+
+    # Variante 1: BGR com contraste aprimorado
+    variants.append(resized_bgr)
+
+    # Variante 2: Escala de cinza com CLAHE (realce adaptativo de contraste)
+    gray = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(6, 6))
+    enhanced_gray = clahe.apply(gray)
+    variants.append(enhanced_gray)
+
+    # Variante 3: Inversão se o texto for claro sobre fundo escuro
+    mean_val = np.mean(gray)
+    if mean_val < 120:
+        inverted = cv2.bitwise_not(enhanced_gray)
+        variants.append(inverted)
+
+    return variants
 
 def clean_extracted_text(text: str, field_name: str = "") -> str:
-    """
-    Limpa e formata o texto extraído de acordo com a semântica do campo (ex: preço, lote, idade).
-    """
     if not text:
         return ""
     
@@ -77,7 +91,8 @@ def clean_extracted_text(text: str, field_name: str = "") -> str:
             return val
     elif any(l in field_lower for l in ["lote", "lot", "nº", "num", "item", "código", "codigo"]):
         # Preserva lotes como "12", "12-A", "05B", "104/1"
-        match = re.search(r'[A-Za-z0-9\-\/]+', text)
+        cleaned = re.sub(r'^(lote|lot|nº|num|#)\s*', '', text, flags=re.IGNORECASE).strip()
+        match = re.search(r'[A-Za-z0-9\-\/]+', cleaned if cleaned else text)
         if match:
             return match.group(0).upper()
             
@@ -90,7 +105,7 @@ def run_ocr_on_rois(
     return_crops: bool = False
 ) -> Any:
     """
-    Executa OCR ultrarrápido por ROI com suporte a Cache Inteligente e visualização de recortes para debug.
+    Executa OCR de alta precisão por ROI em coordenadas calibradas.
     """
     reader = get_ocr_reader()
     results = {}
@@ -108,13 +123,9 @@ def run_ocr_on_rois(
         ref_w = field.get("ref_w")
         ref_h = field.get("ref_h")
 
-        if not ref_w or not ref_h:
-            if raw_x2 > 1280 or raw_y2 > 720:
-                ref_w, ref_h = 1920, 1080
-            elif raw_x2 > 640 or raw_y2 > 360:
-                ref_w, ref_h = 1280, 720
-            else:
-                ref_w, ref_h = 640, 360
+        # Se não tiver ref_w ou for inválido, usa o tamanho do frame atual
+        if not ref_w or not ref_h or ref_w <= 0 or ref_h <= 0:
+            ref_w, ref_h = w_frame, h_frame
 
         scale_x = w_frame / float(ref_w)
         scale_y = h_frame / float(ref_h)
@@ -145,7 +156,7 @@ def run_ocr_on_rois(
             except Exception:
                 crops[nome] = ""
 
-        # 1. Hashing e checagem de Cache (0ms se campo estático e bypass_cache=False)
+        # Checagem de Cache
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         crop_hash = compute_crop_hash(gray_roi)
         cache_key = f"{nome}_{x1}_{y1}_{x2}_{y2}"
@@ -156,10 +167,10 @@ def run_ocr_on_rois(
                 results[nome] = cached["result"]
                 continue
 
-        # 2. Processamento de Imagem
-        processed_roi = preprocess_crop(roi, field_name=nome)
-        
-        # Allowlists aceleradas por tipo de campo
+        # Múltiplas variantes de processamento para máxima robustez
+        variants = enhance_roi_for_ocr(roi)
+        best_text = ""
+
         field_lower = nome.lower()
         allowlist = None
         if any(l in field_lower for l in ["lote", "lot", "nº", "num", "id", "código", "codigo"]):
@@ -167,23 +178,31 @@ def run_ocr_on_rois(
         elif any(p in field_lower for p in ["preç", "preco", "valor", "lance"]):
             allowlist = '0123456789R$.,- '
 
-        try:
-            ocr_out = reader.readtext(
-                processed_roi,
-                detail=0,
-                decoder='greedy',
-                batch_size=4,
-                allowlist=allowlist,
-                adjust_contrast=0.5,
-                contrast_ths=0.1
-            )
-            raw_text = " ".join(ocr_out)
-        except Exception:
-            ocr_out = reader.readtext(processed_roi, detail=0, decoder='greedy')
-            raw_text = " ".join(ocr_out)
+        for variant in variants:
+            try:
+                if allowlist:
+                    ocr_out = reader.readtext(
+                        variant,
+                        detail=0,
+                        allowlist=allowlist,
+                        paragraph=False
+                    )
+                else:
+                    ocr_out = reader.readtext(
+                        variant,
+                        detail=0,
+                        paragraph=False
+                    )
+                
+                detected = " ".join(ocr_out).strip()
+                if detected:
+                    best_text = detected
+                    break
+            except Exception as e:
+                pass
 
-        cleaned_text = clean_extracted_text(raw_text, field_name=nome)
-        final_val = cleaned_text if cleaned_text else (raw_text if raw_text else "")
+        cleaned_text = clean_extracted_text(best_text, field_name=nome)
+        final_val = cleaned_text if cleaned_text else (best_text if best_text else "")
         results[nome] = final_val
 
         # Grava no cache
@@ -196,4 +215,3 @@ def run_ocr_on_rois(
     if return_crops:
         return results, crops
     return results
-
