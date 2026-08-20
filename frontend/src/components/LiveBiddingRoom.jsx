@@ -457,15 +457,9 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     }
   };
 
-  // Alterna o início/parada do monitoramento com verificação automática de transmissão e chave
+  // Alterna o início/parada do monitoramento com verificação automática de transmissão
   const handleToggleScanning = async () => {
     if (!scanning) {
-      if (engineMode === 'gemini' && !geminiApiKey) {
-        setShowApiKeyModal(true);
-        showToast('⚠️ Por favor, insira sua chave gratuita do Gemini para ativar a IA.');
-        return;
-      }
-
       if (!screenStreamRef.current && !manualImageB64) {
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1013,14 +1007,41 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     try {
       if (engineMode === 'gemini') {
         const key = geminiApiKey.trim();
+        
+        // Se tiver chave no frontend, pode chamar direto; caso contrário, chama o backend que já tem a chave no .env
         if (!key) {
-          showToast('⚠️ Configure sua chave do Gemini no botão ⚙️ Chave.');
-          setShowApiKeyModal(true);
+          const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              image_base64: imageBase64ToSend,
+              channel_name: selectedTemplateName || 'Geral',
+              filter_categories: activeCategories
+            })
+          });
+          const data = await res.json();
+          if (data.status === 'success' || data.current_log) {
+            setCapturedFrameImage(imageBase64ToSend);
+            setOcrData({
+              "Número do Lote": data.current_log?.lot_number || '',
+              "Preço Atual": data.current_log?.price || '',
+              "Descrição do Lote": data.current_log?.description || '',
+              "Categoria": data.current_log?.category || 'Geral'
+            });
+            setCurrentLog(data.current_log);
+            fetchHistoryLogs(historyFilterChannel);
+            if (data.alert_triggered) {
+              setAlertActive({ category: data.current_log?.category, time: new Date().toLocaleTimeString('pt-BR') });
+              playAlertSound();
+            }
+          }
+          setLastScanTime(new Date());
+          setLastScanMs(Math.round(performance.now() - tStart));
           isScanningRef.current = false;
           return;
         }
 
-        const modelName = localStorage.getItem('gemini_selected_model') || await getOrDiscoverGeminiModel(key);
+        const modelName = localStorage.getItem('gemini_selected_model') || 'gemini-2.0-flash';
 
         const cleanB64 = imageBase64ToSend.includes(',') ? imageBase64ToSend.split(',')[1] : imageBase64ToSend;
         let mimeType = 'image/jpeg';
