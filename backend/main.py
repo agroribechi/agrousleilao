@@ -121,7 +121,10 @@ class OCRTestRequest(BaseModel):
     fields: List[Dict[str, Any]]
 
 class VisionFrameRequest(BaseModel):
-    image_base64: str
+    image_base64: Optional[str] = None
+    url: Optional[str] = None
+    minutes: Optional[int] = 0
+    seconds: Optional[int] = 0
     api_key: Optional[str] = None
     auction_id: Optional[int] = None
     channel_name: Optional[str] = "Geral"
@@ -626,13 +629,22 @@ def read_ocr(req: OCRTestRequest):
 @app.post("/api/vision/read-frame")
 async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_db)):
     """
-    Recebe um frame do leilão e processa via Gemini 2.0 Flash Vision
-    sem necessidade de calibração prévia de coordenadas ou caixas.
+    Recebe um frame ou URL do leilão e processa via Gemini Vision.
+    Captura automaticamente do YouTube localmente sem precisar compartilhar tela.
     """
-    if not req.image_base64:
-        raise HTTPException(status_code=400, detail="Imagem em base64 não fornecida.")
+    frame_b64 = req.image_base64
 
-    res = await gemini_vision.analyze_auction_frame(req.image_base64, req.api_key)
+    if not frame_b64 and req.url:
+        _, frame_b64, msg = fetch_youtube_frame(
+            req.url, req.minutes or 0, req.seconds or 0, is_live=req.is_live
+        )
+        if not frame_b64:
+            raise HTTPException(status_code=400, detail=f"Não foi possível extrair frame do YouTube: {msg}")
+
+    if not frame_b64:
+        raise HTTPException(status_code=400, detail="Forneça image_base64 ou url do leilão.")
+
+    res = await gemini_vision.analyze_auction_frame(frame_b64, req.api_key)
     if not res.get("success"):
         return {
             "status": "error",
@@ -646,12 +658,15 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
     price = str(data.get("price", "")).strip() if data.get("price") is not None else ""
     category = str(data.get("category", "Geral")).strip() if data.get("category") is not None else "Geral"
     desc = str(data.get("description", "")).strip() if data.get("description") is not None else ""
+    age = str(data.get("weight", "")).strip() if data.get("weight") is not None else ""
 
     alert_triggered = False
-    if req.filter_categories and category:
+    matched_cat = ""
+    if req.filter_categories:
         for cat in req.filter_categories:
             if cat.lower() in category.lower() or cat.lower() in desc.lower():
                 alert_triggered = True
+                matched_cat = cat
                 break
 
     # Constrói log se for tela de leilão válida ou se houver dados parciais
@@ -660,6 +675,7 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
         "price": price or "---",
         "category": category or "Geral",
         "description": desc or "Lote em transmissão",
+        "age": age,
         "status": "Em Andamento",
         "created_at": datetime.utcnow().isoformat()
     }
@@ -669,10 +685,13 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
             log_entry = models.AuctionLog(
                 auction_id=req.auction_id,
                 channel_name=req.channel_name or "Geral",
+                video_url=req.url,
                 lot_number=lot_number or "---",
                 price=price or "---",
                 category=category or "Geral",
                 description=desc,
+                age=age,
+                frame_image=frame_b64,
                 captured_at=datetime.utcnow()
             )
             db.add(log_entry)
@@ -680,12 +699,31 @@ async def vision_read_frame(req: VisionFrameRequest, db: Session = Depends(get_d
             db.refresh(log_entry)
             current_log["id"] = log_entry.id
         except Exception as e:
-            print(f"[Vision Log] Erro ao gravar log: {e}")
+            print("[VISION] Erro ao salvar log:", e)
+
+    # Envia automaticamente para a VPS Relay
+    try:
+        await vps_client.push_frame_data(
+            template_name=req.channel_name or "Geral",
+            ocr_data=data,
+            lot_number=lot_number,
+            price=price,
+            description=desc,
+            category=category,
+            age=age,
+            frame_image=frame_b64,
+            auction_id=req.auction_id,
+            video_url=req.url,
+            filter_categories=req.filter_categories or [],
+            alert_triggered=alert_triggered,
+            matched_category=matched_cat
+        )
+    except Exception as e:
+        print("[VISION] Erro no push VPS:", e)
 
     return {
         "status": "success",
         "is_auction_screen": is_auction,
-        "lot_number": lot_number,
         "price": price,
         "category": category,
         "description": desc,

@@ -978,7 +978,7 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
     isScanningRef.current = true;
     const tStart = performance.now();
 
-    // 1. Captura direta do Vídeo Nativo HLS (Canal do Boi, Canal Rural, etc.)
+    // 1. Tenta obter frame local se disponível (HLS, Print, etc.)
     let imageBase64ToSend = manualImageB64;
     if (nativeVideoRef.current && nativeVideoRef.current.videoWidth > 0 && !nativeVideoRef.current.paused) {
       try {
@@ -999,7 +999,10 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       imageBase64ToSend = capturedFrameImage;
     }
 
-    if (!imageBase64ToSend) {
+    const currentUrl = videoUrlRef.current || videoUrl;
+
+    // Se não tiver imagem nem URL de vídeo, interrompe
+    if (!imageBase64ToSend && !currentUrl) {
       isScanningRef.current = false;
       return;
     }
@@ -1008,170 +1011,38 @@ export default function LiveBiddingRoom({ API_BASE, templates = [], auctions = [
       if (engineMode === 'gemini') {
         const key = geminiApiKey.trim();
         
-        // Se tiver chave no frontend, pode chamar direto; caso contrário, chama o backend que já tem a chave no .env
-        if (!key) {
-          const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              image_base64: imageBase64ToSend,
-              channel_name: selectedTemplateName || 'Geral',
-              filter_categories: activeCategories
-            })
-          });
-          const data = await res.json();
-          if (data.status === 'success' || data.current_log) {
-            setCapturedFrameImage(imageBase64ToSend);
-            setOcrData({
-              "Número do Lote": data.current_log?.lot_number || '',
-              "Preço Atual": data.current_log?.price || '',
-              "Descrição do Lote": data.current_log?.description || '',
-              "Categoria": data.current_log?.category || 'Geral'
-            });
-            setCurrentLog(data.current_log);
-            fetchHistoryLogs(historyFilterChannel);
-            if (data.alert_triggered) {
-              setAlertActive({ category: data.current_log?.category, time: new Date().toLocaleTimeString('pt-BR') });
-              playAlertSound();
-            }
-          }
-          setLastScanTime(new Date());
-          setLastScanMs(Math.round(performance.now() - tStart));
-          isScanningRef.current = false;
-          return;
-        }
-
-        const modelName = localStorage.getItem('gemini_selected_model') || 'gemini-2.0-flash';
-
-        const cleanB64 = imageBase64ToSend.includes(',') ? imageBase64ToSend.split(',')[1] : imageBase64ToSend;
-        let mimeType = 'image/jpeg';
-        if (imageBase64ToSend.includes('image/png')) mimeType = 'image/png';
-        else if (imageBase64ToSend.includes('image/webp')) mimeType = 'image/webp';
-
-        const systemPrompt = `Você é um especialista em visão computacional para transmissões de leilões de gado e agronegócio brasileiro (Canal do Boi, Canal Rural, Terra Viva, Remate Web, AgroBrasil, etc.).
-Sua tarefa é analisar o frame da transmissão e extrair os dados estruturados do lote e lance em JSON estrito.
-Retorne um JSON com os campos:
-- "is_auction_screen": true se for tela de leilão com dados de lote, false se for propaganda, vinheta ou intervalo.
-- "lot_number": número ou código do lote (ex: "14", "102-A").
-- "price": valor do lance ou preço atual (ex: "R$ 2.450,00").
-- "description": descrição dos animais (ex: "30 Machos Nelore Mocho").
-- "category": categoria (escolha entre: "Bezerros", "Novilhas", "Nelore", "Matrizes", "Boi Gordo", "Garrotes", "Cruzado", "Geral").
-- "quantity": quantidade de animais (ex: "30").
-- "weight": peso médio ou total (ex: "280 kg").
-- "seller": vendedor ou fazenda.
-- "location": cidade/estado.
-- "confidence": confiança de 0 a 1.`;
-
-        const payload = {
-          contents: [
-            {
-              parts: [
-                { text: "Analise esta imagem da transmissão de leilão de gado e extraia os dados do lote e lance em JSON." },
-                {
-                  inline_data: {
-                    mime_type: mimeType,
-                    data: cleanB64
-                  }
-                }
-              ]
-            }
-          ],
-          system_instruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          generationConfig: {
-            response_mime_type: "application/json",
-            temperature: 0.1,
-            maxOutputTokens: 500
-          }
-        };
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`;
-        const res = await fetch(url, {
+        // Chama o backend que processa com Gemini e já sincroniza com a VPS
+        const res = await fetch(`${API_BASE}/api/vision/read-frame`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            image_base64: imageBase64ToSend,
+            url: currentUrl,
+            channel_name: selectedTemplateName || 'Geral',
+            filter_categories: activeCategories,
+            api_key: key || undefined
+          })
         });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.error?.message || `Erro ${res.status}`;
-          throw new Error(errMsg);
-        }
-
-        const dataRes = await res.json();
-        const rawText = dataRes.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-        const cleanJson = rawText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
-        const parsed = JSON.parse(cleanJson);
-
-        setCapturedFrameImage(imageBase64ToSend);
-        setGeminiStatus(parsed.is_auction_screen ? 'auction' : 'ad');
+        const data = await res.json();
         
-        const extractedLot = String(parsed.lot_number || '').trim();
-        const extractedPrice = String(parsed.price || '').trim();
-        const extractedCat = String(parsed.category || 'Geral').trim();
-        const extractedDesc = String(parsed.description || '').trim();
-
-        setOcrData({
-          "Número do Lote": extractedLot,
-          "Preço Atual": extractedPrice,
-          "Descrição do Lote": extractedDesc,
-          "Categoria": extractedCat,
-          "Quantidade": parsed.quantity || '',
-          "Peso": parsed.weight || '',
-          "Vendedor": parsed.seller || '',
-          "Localização": parsed.location || ''
-        });
-
-        const newLogItem = {
-          lot_number: extractedLot || '---',
-          price: extractedPrice || '---',
-          category: extractedCat || 'Geral',
-          description: extractedDesc || 'Lote ao vivo',
-          channel_name: selectedTemplateName || 'Geral',
-          status: 'Em Andamento',
-          created_at: new Date().toISOString()
-        };
-        setCurrentLog(newLogItem);
-
-        // Salva silenciosamente no backend se for lote válido
-        if (parsed.is_auction_screen && (extractedLot || extractedPrice)) {
-          fetch(`${API_BASE}/api/logs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              channel_name: selectedTemplateName || 'Geral',
-              video_url: videoUrl,
-              lot_number: extractedLot || '---',
-              category: extractedCat || 'Geral',
-              description: extractedDesc || '',
-              price: extractedPrice || '---',
-              status: 'Em Andamento',
-              frame_image: imageBase64ToSend
-            })
-          }).then(r => r.json()).then(saved => {
-            if (saved?.id) {
-              fetchHistoryLogs(historyFilterChannel);
-            }
-          }).catch(e => console.warn("Erro ao registrar log no backend:", e));
-        }
-
-        // Alerta de Categoria
-        if (activeCategories && activeCategories.length > 0) {
-          const match = activeCategories.some(c => 
-            extractedCat.toLowerCase().includes(c.toLowerCase()) || 
-            extractedDesc.toLowerCase().includes(c.toLowerCase())
-          );
-          if (match) {
-            setAlertActive({
-              category: extractedCat,
-              time: new Date().toLocaleTimeString('pt-BR')
-            });
+        if (data.status === 'success') {
+          if (data.frame_image) setCapturedFrameImage(data.frame_image);
+          if (data.ocr_data) setOcrData(data.ocr_data);
+          if (data.current_log) {
+            setCurrentLog(data.current_log);
+            fetchHistoryLogs(historyFilterChannel);
+          }
+          if (data.alert_triggered) {
+            setAlertActive({ category: data.matched_category || data.current_log?.category, time: new Date().toLocaleTimeString('pt-BR') });
             playAlertSound();
           }
         }
+        setLastScanTime(new Date());
+        setLastScanMs(Math.round(performance.now() - tStart));
+        isScanningRef.current = false;
+        return;
       } else {
-        // Modo OCR Legado com Coordenadas
+        // Modo OCR com Coordenadas Calibradas
         const liveMode = isLiveStreamRef.current;
         const currentUrl = videoUrlRef.current;
         const currentTimeSec = getPlayerCurrentTimeSec();
