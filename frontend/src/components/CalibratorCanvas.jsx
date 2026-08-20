@@ -1,12 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Save, Trash2, Undo, Play, Sparkles, AlertCircle, CheckCircle, Tag, FolderOpen, Scissors, Monitor } from 'lucide-react';
+import { 
+  Camera, Save, Trash2, Undo, Play, Sparkles, AlertCircle, 
+  CheckCircle, Tag, FolderOpen, Scissors, Monitor, Plus, Edit2, Tv
+} from 'lucide-react';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 
-export default function CalibratorCanvas({ API_BASE, user, templates = [], initialTemplate = null, onTemplateSaved }) {
+// Extrai o ID de qualquer formato de link do YouTube
+export const extractYouTubeId = (urlStr) => {
+  if (!urlStr) return null;
+  const str = urlStr.trim();
+  const regExp = /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|live\/))([^#&?\n]+)/;
+  const match = str.match(regExp);
+  if (match && match[1]) return match[1];
+  if (str.length === 11 && !str.includes('/') && !str.includes('.')) return str;
+  return null;
+};
+
+export default function CalibratorCanvas({ 
+  API_BASE, 
+  user, 
+  templates = [], 
+  auctions = [], 
+  initialTemplate = null, 
+  onTemplateSaved 
+}) {
+  const [selectedAuctionId, setSelectedAuctionId] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [channelName, setChannelName] = useState('');
   const [url, setUrl] = useState('https://www.youtube.com/watch?v=fHg377zdhms');
-  const [minutes, setMinutes] = useState(19);
-  const [seconds, setSeconds] = useState(39);
+  const [logoUrl, setLogoUrl] = useState('');
+  const [minutes, setMinutes] = useState(0);
+  const [seconds, setSeconds] = useState(10);
+  
   const [loadingFrame, setLoadingFrame] = useState(false);
   const [frameData, setFrameData] = useState(null); // { image, width, height }
   
@@ -15,10 +41,8 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
   const [currentDragPoint, setCurrentDragPoint] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  const [channelName, setChannelName] = useState('');
-  const [logoUrl, setLogoUrl] = useState('');
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [ocrResults, setOcrResults] = useState(null);
+  const [ocrCrops, setOcrCrops] = useState({});
   const [testingOcr, setTestingOcr] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
@@ -43,6 +67,30 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     }
   }, [initialTemplate]);
 
+  // Seletor de Leilão Cadastrado
+  const handleSelectAuction = (auctionId) => {
+    setSelectedAuctionId(auctionId);
+    if (!auctionId) return;
+    const auc = auctions.find(a => String(a.id) === String(auctionId));
+    if (auc) {
+      setChannelName(auc.title || '');
+      if (auc.logo_url) setLogoUrl(auc.logo_url);
+      if (auc.website_url && auc.website_url.includes('youtu')) {
+        setUrl(auc.website_url);
+      }
+      // Se tiver template_id vinculado
+      if (auc.template_id) {
+        const foundT = templates.find(t => t.id === auc.template_id);
+        if (foundT) {
+          setFields(foundT.fields || []);
+          if (foundT.video_url) setUrl(foundT.video_url);
+        }
+      }
+      showToast(`Leilão '${auc.title}' selecionado para calibração.`);
+    }
+  };
+
+  // Seletor de Gabarito/Template
   const handleSelectTemplateChange = (e) => {
     const val = e.target.value;
     setSelectedTemplateId(val);
@@ -58,7 +106,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       setLogoUrl(found.logo_url || '');
       setFields(found.fields || []);
       if (found.video_url) setUrl(found.video_url);
-      showToast(`Gabarito '${found.name}' carregado para edição.`);
+      showToast(`Gabarito '${found.name}' carregado (${found.fields?.length || 0} campos).`);
     }
   };
 
@@ -102,7 +150,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       showToast(`Frame capturado com sucesso no tempo ${minutes}m ${seconds}s!`);
     } catch (err) {
       if (err.message.includes('bot') || err.message.includes('confirm you') || err.message.includes('extração') || err.message.includes('400')) {
-        showToast('⚠️ YouTube bloqueou o IP do servidor (Bot Check). Abrindo Player para captura direta do seu navegador...');
+        showToast('⚠️ YouTube solicitou confirmação de navegador. Abrindo Player para captura direta...');
         setShowPlayer(true);
       } else {
         alert(`Erro ao buscar frame: ${err.message}`);
@@ -110,15 +158,6 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     } finally {
       setLoadingFrame(false);
     }
-  };
-
-  // Abre o Player do YouTube
-  const handleOpenPlayer = () => {
-    if (!url || !url.trim()) {
-      alert('Por favor, informe a URL ou ID do vídeo do YouTube.');
-      return;
-    }
-    setShowPlayer(true);
   };
 
   // Captura a Tela
@@ -142,7 +181,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
           
           stream.getTracks().forEach(t => t.stop());
           setShowPlayer(false);
-          showToast('Tela capturada! Agora recorte APENAS a área de vídeo limpa.');
+          showToast('Tela capturada! Agora recorte APENAS a área do vídeo.');
         }, 500);
       };
     } catch (err) {
@@ -162,7 +201,6 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     const scaleX = rawImgRef.current.naturalWidth / rawImgRef.current.width;
     const scaleY = rawImgRef.current.naturalHeight / rawImgRef.current.height;
     
-    // Calcula o tamanho real do crop na imagem original
     const cropWidth = completedCrop.width * scaleX;
     const cropHeight = completedCrop.height * scaleY;
     
@@ -186,7 +224,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     setFrameData({ image: croppedBase64, width: Math.round(cropWidth), height: Math.round(cropHeight) });
     setCapturedRawImage(null);
     setCrop(undefined);
-    showToast('Recorte salvo com sucesso! Agora desenhe os campos.');
+    showToast('Recorte salvo com sucesso! Agora ajuste ou desenhe os campos.');
   };
 
   const handleFileUploadCalibrator = (e) => {
@@ -198,12 +236,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
         const img = new Image();
         img.onload = () => {
           setFrameData({ image: b64, width: img.width, height: img.height });
-          const aspectRatio = img.width / img.height;
-          if (Math.abs(aspectRatio - 1.777) > 0.05) {
-             showToast('⚠️ Aviso: O print parece cortado (não é 16:9). Recomendamos usar "Carregar do YouTube" para evitar erros no ao vivo.');
-          } else {
-             showToast('Print carregado com sucesso!');
-          }
+          showToast('Print carregado com sucesso!');
         };
         img.src = b64;
       };
@@ -213,10 +246,10 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
 
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3000);
+    setTimeout(() => setToastMsg(''), 3500);
   };
 
-  // Interação de desenho sobre a imagem (Mouse e Touch)
+  // Coordenadas de desenho
   const getClickCoords = (e) => {
     if (!imgRef.current) return null;
     const rect = imgRef.current.getBoundingClientRect();
@@ -235,8 +268,8 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     const displayX = clientX - rect.left;
     const displayY = clientY - rect.top;
 
-    const scaleX = frameData.width / rect.width;
-    const scaleY = frameData.height / rect.height;
+    const scaleX = (frameData?.width || 640) / rect.width;
+    const scaleY = (frameData?.height || 360) / rect.height;
 
     return {
       x: Math.round(displayX * scaleX),
@@ -252,7 +285,6 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     if (!frameData) return;
     const coords = getClickCoords(e);
     if (!coords) return;
-
     setStartPoint(coords);
     setCurrentDragPoint(coords);
     setIsDrawing(true);
@@ -268,7 +300,6 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     if (!isDrawing || !startPoint) return;
     const endPoint = getClickCoords(e) || currentDragPoint;
     setIsDrawing(false);
-
     if (!endPoint) return;
 
     const x1 = Math.min(startPoint.x, endPoint.x);
@@ -276,8 +307,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     const x2 = Math.max(startPoint.x, endPoint.x);
     const y2 = Math.max(startPoint.y, endPoint.y);
 
-    // Ignora seleções acidentais mínimas
-    if (Math.abs(x2 - x1) < 15 || Math.abs(y2 - y1) < 15) {
+    if (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10) {
       setStartPoint(null);
       setCurrentDragPoint(null);
       return;
@@ -298,14 +328,10 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
     setCurrentDragPoint(null);
   };
 
-  // Atalhos Rápidos de Caixas (Otimizado para Telas Touch Mobile)
+  // Atalhos Rápidos de Caixas
   const handleAddPresetBox = (fieldType) => {
-    if (!frameData) {
-      alert("Por favor, carregue uma imagem primeiro para adicionar caixas.");
-      return;
-    }
-    const w = frameData.width;
-    const h = frameData.height;
+    const w = frameData?.width || 1280;
+    const h = frameData?.height || 720;
 
     let preset = { nome: "Campo", x1: Math.round(w * 0.05), y1: Math.round(h * 0.1), x2: Math.round(w * 0.35), y2: Math.round(h * 0.25), ref_w: w, ref_h: h };
     if (fieldType === 'lote') {
@@ -327,9 +353,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
   };
 
   const handleUndo = () => {
-    if (fields.length > 0) {
-      setFields(fields.slice(0, -1));
-    }
+    if (fields.length > 0) setFields(fields.slice(0, -1));
   };
 
   const handleClear = () => {
@@ -339,9 +363,17 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
 
   // Testar OCR em todas as ROIs
   const handleTestOCR = async () => {
-    if (fields.length === 0 || !frameData) return;
+    if (fields.length === 0) {
+      alert("Adicione ao menos 1 campo antes de testar o OCR.");
+      return;
+    }
+    if (!frameData) {
+      alert("Carregue uma imagem ou extraia um frame do YouTube primeiro.");
+      return;
+    }
     setTestingOcr(true);
     setOcrResults(null);
+    setOcrCrops({});
 
     try {
       const res = await fetch(`${API_BASE}/api/ocr/read`, {
@@ -355,8 +387,9 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao processar OCR.');
 
-      setOcrResults(data.results);
-      showToast('Leitura OCR concluída!');
+      setOcrResults(data.results || {});
+      setOcrCrops(data.debug_crops || {});
+      showToast('✅ OCR processado com sucesso em todas as caixas!');
     } catch (err) {
       alert(`Erro no OCR: ${err.message}`);
     } finally {
@@ -367,7 +400,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
   // Salvar Template no Backend
   const handleSaveTemplate = async () => {
     if (!channelName.trim()) {
-      alert('Por favor, informe um nome para a leiloeira/canal.');
+      alert('Por favor, informe um nome para o Gabarito / Leiloeira.');
       return;
     }
     if (fields.length === 0) {
@@ -393,49 +426,66 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao salvar template.');
 
-      showToast(`Template '${channelName}' salvo com sucesso!`);
+      showToast(`🎯 Gabarito '${channelName}' salvo com sucesso!`);
       if (onTemplateSaved) onTemplateSaved();
     } catch (err) {
       alert(`Erro: ${err.message}`);
     }
   };
 
+  const videoId = extractYouTubeId(url);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       {toastMsg && (
         <div style={{
           position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 100,
-          background: 'rgba(16, 185, 129, 0.9)', color: '#fff', padding: '0.85rem 1.5rem',
+          background: 'rgba(16, 185, 129, 0.95)', color: '#fff', padding: '0.85rem 1.5rem',
           borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '0.5rem',
-          boxShadow: '0 10px 25px rgba(16, 185, 129, 0.4)', fontWeight: 600
+          boxShadow: '0 10px 25px rgba(16, 185, 129, 0.4)', fontWeight: 700
         }}>
           <CheckCircle size={20} />
           {toastMsg}
         </div>
       )}
 
-      {/* BARRA DE CAPTURA DO YOUTUBE E SELEÇÃO DE GABARITO */}
-      <div className="glass-panel" style={{ padding: '1.5rem' }}>
+      {/* BARRA UNIFICADA DE SELEÇÃO DE LEILÃO E GABARITO */}
+      <div className="glass-panel" style={{ padding: '1.25rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Camera size={20} color="var(--accent-primary)" />
-            Capturar Imagem & Editar Gabarito do Leilão
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+            <Camera size={20} color="#34d399" />
+            Calibrador de Caixas ROI do Leilão
           </h3>
 
-          {/* SELETOR DE GABARITOS SALVOS E LOGO DA LEILOEIRA */}
-          {templates.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              {logoUrl && (
-                <div style={{ width: '32px', height: '32px', borderRadius: '6px', background: '#0f172a', border: '1px solid #818cf8', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <img src={logoUrl} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                </div>
-              )}
-              <FolderOpen size={18} color="#818cf8" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {/* SELETOR DE LEILÕES */}
+            {auctions.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: 600 }}>Leilão:</span>
+                <select 
+                  value={selectedAuctionId} 
+                  onChange={(e) => handleSelectAuction(e.target.value)}
+                  className="glass-input"
+                  style={{ width: '200px', padding: '0.4rem 0.6rem', fontSize: '0.82rem' }}
+                >
+                  <option value="" style={{ background: '#0f172a' }}>Escolha um Leilão...</option>
+                  {auctions.map(a => (
+                    <option key={a.id} value={String(a.id)} style={{ background: '#0f172a' }}>
+                      🐂 {a.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* SELETOR DE GABARITOS EXISTENTES */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: 600 }}>Gabarito:</span>
               <select 
                 value={selectedTemplateId} 
                 onChange={handleSelectTemplateChange}
                 className="glass-input"
-                style={{ width: '240px', padding: '0.45rem 0.75rem', fontSize: '0.85rem' }}
+                style={{ width: '220px', padding: '0.4rem 0.6rem', fontSize: '0.82rem' }}
               >
                 <option value="" style={{ background: '#0f172a' }}>➕ Criar Novo Gabarito...</option>
                 {templates.map(t => (
@@ -445,15 +495,17 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
                 ))}
               </select>
             </div>
-          )}
+          </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px auto', gap: '1rem', alignItems: 'end' }}>
+
+        {/* INPUTS DE LINK DO YOUTUBE E TEMPO */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px', gap: '1rem', alignItems: 'end' }}>
           <div>
             <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>Link do Vídeo no YouTube</label>
             <input 
               type="text" className="glass-input" 
               value={url} onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://www.youtube.com/watch?v=..."
+              placeholder="https://www.youtube.com/watch?v=... ou https://youtu.be/..."
             />
           </div>
           <div>
@@ -471,6 +523,8 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
             />
           </div>
         </div>
+
+        {/* BOTÕES DE EXTRAÇÃO DE FRAME */}
         <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem', flexWrap: 'wrap' }}>
           <button 
             onClick={handleFetchBackendFrame} 
@@ -478,23 +532,22 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
             className="btn-gradient" 
             style={{ flex: 1, minWidth: '220px' }}
           >
-            {loadingFrame ? 'Carregando Frame...' : <><Camera size={18} /> Extrair Frame do YouTube</>}
+            {loadingFrame ? 'Extraindo Frame do YouTube...' : <><Camera size={18} /> Extrair Frame do YouTube</>}
           </button>
 
           <button 
-            onClick={handleOpenPlayer} 
-            disabled={loadingFrame} 
+            onClick={() => setShowPlayer(true)} 
             className="btn-secondary" 
-            style={{ flex: 1, minWidth: '200px' }}
+            style={{ flex: 1, minWidth: '180px' }}
           >
-            <Play size={18} /> Tocar no Player
+            <Play size={18} /> Abrir Player YouTube
           </button>
           
-          <button onClick={handleStartCapture} className="btn-secondary" style={{ flex: 1, minWidth: '180px', backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
+          <button onClick={handleStartCapture} className="btn-secondary" style={{ flex: 1, minWidth: '160px', backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#38bdf8' }}>
             <Monitor size={18} /> Capturar Tela
           </button>
 
-          <label className="btn-secondary" style={{ flex: 1, minWidth: '160px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }}>
+          <label className="btn-secondary" style={{ flex: 1, minWidth: '150px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }}>
             <FolderOpen size={18} style={{ marginRight: '0.4rem' }} />
             📁 Enviar Print
             <input type="file" accept="image/*" onChange={handleFileUploadCalibrator} style={{ display: 'none' }} />
@@ -510,17 +563,25 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
         }}>
           <div style={{ background: '#0f172a', padding: '1rem', borderRadius: '12px', width: '100%', maxWidth: '900px', border: '1px solid var(--border-subtle)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Play size={20} color="#f43f5e" /> Pausar no momento exato e capturar</h3>
+              <h3 style={{ color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                <Play size={20} color="#f43f5e" /> Pausar no momento exato e capturar tela
+              </h3>
               <button onClick={() => setShowPlayer(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '1.5rem', cursor: 'pointer' }}>&times;</button>
             </div>
             
             <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0, overflow: 'hidden', background: '#000', borderRadius: '8px' }}>
-              <iframe
-                src={`https://www.youtube.com/embed/${url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?\n]+)/)?.[1]}?autoplay=1&start=${(Number(minutes) * 60) + Number(seconds)}`}
-                frameBorder="0"
-                allow="autoplay; fullscreen"
-                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-              ></iframe>
+              {videoId ? (
+                <iframe
+                  src={`https://www.youtube.com/embed/${videoId}?autoplay=1&start=${(Number(minutes) * 60) + Number(seconds)}`}
+                  frameBorder="0"
+                  allow="autoplay; fullscreen"
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+                ></iframe>
+              ) : (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+                  Link de vídeo inválido
+                </div>
+              )}
             </div>
             
             <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
@@ -543,7 +604,7 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
               <Scissors size={20} color="#38bdf8" /> Passo Final: Recorte a Imagem
             </h3>
             <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-              ⚠️ ATENÇÃO: Recorte **EXATAMENTE** a área do vídeo (remover barra de endereços do navegador, logo do YouTube, chat, etc). Isso garante que o Ao Vivo vai mapear perfeitamente.
+              ⚠️ Recorte **EXATAMENTE** a área do vídeo (sem barras de navegador ou chat).
             </p>
             
             <div style={{ display: 'flex', justifyContent: 'center', background: '#000', padding: '1rem', borderRadius: '8px' }}>
@@ -573,42 +634,42 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
       )}
 
       {/* ÁREA DE CALIBRAÇÃO E CANVAS DE MARCAÇÃO */}
-      {frameData && !capturedRawImage && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1.5rem' }}>
-          
-          {/* PAINEL DA IMAGEM COM CAIXAS ROI OVERLAY */}
-          <div className="glass-panel" style={{ padding: '1.25rem', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Tag size={16} /> Arraste na imagem para desenhar o retângulo ROI do campo
-              </span>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button onClick={handleUndo} className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
-                  <Undo size={14} /> Desfazer
-                </button>
-                <button onClick={handleClear} className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', color: '#f87171' }}>
-                  <Trash2 size={14} /> Limpar
-                </button>
-              </div>
-            </div>
-
-            {/* ATALHOS RÁPIDOS DE CAIXAS (EXCELENTE PARA TELAS MOBILE) */}
-            <div className="horizontal-chips-scroll" style={{ marginBottom: '0.85rem', background: 'rgba(15, 23, 42, 0.4)', padding: '0.5rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, alignSelf: 'center', whiteSpace: 'nowrap', marginRight: '0.25rem' }}>⚡ Atalhos Touch:</span>
-              <button onClick={() => handleAddPresetBox('lote')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8', whiteSpace: 'nowrap' }}>
-                + Caixa Lote
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '1.5rem' }}>
+        
+        {/* PAINEL DA IMAGEM COM CAIXAS ROI OVERLAY */}
+        <div className="glass-panel" style={{ padding: '1.25rem', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Tag size={16} /> Arraste na imagem para desenhar o retângulo ROI do campo
+            </span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button onClick={handleUndo} className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
+                <Undo size={14} /> Desfazer
               </button>
-              <button onClick={() => handleAddPresetBox('preco')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#34d399', whiteSpace: 'nowrap' }}>
-                + Caixa Preço
-              </button>
-              <button onClick={() => handleAddPresetBox('desc')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#facc15', whiteSpace: 'nowrap' }}>
-                + Caixa Descrição
-              </button>
-              <button onClick={() => handleAddPresetBox('idade')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#c084fc', whiteSpace: 'nowrap' }}>
-                + Caixa Idade/Peso
+              <button onClick={handleClear} className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', color: '#f87171' }}>
+                <Trash2 size={14} /> Limpar
               </button>
             </div>
+          </div>
 
+          {/* ATALHOS RÁPIDOS DE CAIXAS */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.85rem', background: 'rgba(15, 23, 42, 0.4)', padding: '0.5rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700 }}>⚡ Atalhos:</span>
+            <button onClick={() => handleAddPresetBox('lote')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8' }}>
+              + Caixa Lote
+            </button>
+            <button onClick={() => handleAddPresetBox('preco')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#34d399' }}>
+              + Caixa Preço
+            </button>
+            <button onClick={() => handleAddPresetBox('desc')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#facc15' }}>
+              + Caixa Descrição
+            </button>
+            <button onClick={() => handleAddPresetBox('idade')} className="btn-secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', fontWeight: 600, color: '#c084fc' }}>
+              + Caixa Idade/Peso
+            </button>
+          </div>
+
+          {frameData ? (
             <div 
               ref={containerRef}
               style={{ position: 'relative', userSelect: 'none', cursor: 'crosshair', borderRadius: '8px', overflow: 'hidden', touchAction: 'none' }}
@@ -629,13 +690,13 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
               {/* RENDERIZAÇÃO DAS CAIXAS DE CAMPOS DEFINIDOS */}
               {imgRef.current && fields.map((field, idx) => {
                 const rect = imgRef.current.getBoundingClientRect();
-                const scaleX = rect.width / frameData.width;
-                const scaleY = rect.height / frameData.height;
+                const scaleX = rect.width / (frameData.width || 640);
+                const scaleY = rect.height / (frameData.height || 360);
 
                 const left = field.x1 * scaleX;
                 const top = field.y1 * scaleY;
-                const width = (field.x2 - field.x1) * scaleX;
-                const height = (field.y2 - field.y1) * scaleY;
+                const width = Math.max(10, (field.x2 - field.x1) * scaleX);
+                const height = Math.max(10, (field.y2 - field.y1) * scaleY);
 
                 return (
                   <div key={idx} style={{
@@ -672,135 +733,118 @@ export default function CalibratorCanvas({ API_BASE, user, templates = [], initi
                 }} />
               )}
             </div>
-          </div>
-
-          {/* PAINEL LATERAL DE GERENCIAMENTO DOS CAMPOS */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div className="glass-panel" style={{ padding: '1.25rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
-              <h4 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem' }}>
-                📋 Campos Mapeados ({fields.length})
-              </h4>
-
-              {fields.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-dim)', fontSize: '0.875rem' }}>
-                  <AlertCircle size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
-                  <p>Nenhum campo selecionado.</p>
-                  <p style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>Arraste um retângulo sobre a imagem para criar uma área ROI.</p>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '350px', overflowY: 'auto' }}>
-                  {fields.map((field, idx) => (
-                    <div key={idx} style={{
-                      background: 'rgba(15, 23, 42, 0.5)', border: '1px solid var(--border-subtle)',
-                      padding: '0.75rem', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '0.5rem'
-                    }}>
-                      <input 
-                        type="text" className="glass-input" 
-                        value={field.nome}
-                        onChange={(e) => {
-                          const updated = [...fields];
-                          updated[idx].nome = e.target.value;
-                          setFields(updated);
-                        }}
-                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
-                      />
-                      <button 
-                        onClick={() => handleDeleteField(idx)}
-                        style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.2rem' }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* AÇÕES DE TESTE E SALVAMENTO */}
-              <div style={{ marginTop: 'auto', paddingTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <button 
-                  onClick={handleTestOCR} 
-                  disabled={testingOcr || fields.length === 0} 
-                  className="btn-gradient" 
-                  style={{ width: '100%', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}
-                >
-                  <Sparkles size={18} />
-                  {testingOcr ? 'Lendo com IA...' : 'Testar OCR nos Campos'}
-                </button>
-
-                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                      Nome da Leiloeira / Canal:
-                    </label>
-                    <input 
-                      type="text" className="glass-input" 
-                      placeholder="Ex: Leiloboi Unai"
-                      value={channelName} onChange={(e) => setChannelName(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                      Logotipo do Leilão / Leiloeira:
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      {logoUrl ? (
-                        <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#0f172a', border: '1px solid #818cf8', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <img src={logoUrl} alt="Logo Preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                        </div>
-                      ) : (
-                        <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px dashed var(--border-subtle)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                          Sem Logo
-                        </div>
-                      )}
-                      
-                      <label className="btn-secondary" style={{ cursor: 'pointer', padding: '0.4rem 0.6rem', fontSize: '0.75rem', flexShrink: 0 }}>
-                        📤 Upload Logo
-                        <input type="file" accept="image/*" onChange={handleLogoFileUpload} style={{ display: 'none' }} />
-                      </label>
-
-                      <input 
-                        type="text" className="glass-input" 
-                        placeholder="Ou URL da Logo..."
-                        value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)}
-                        style={{ fontSize: '0.75rem', padding: '0.4rem 0.5rem' }}
-                      />
-                    </div>
-                  </div>
-
-                  <button onClick={handleSaveTemplate} className="btn-gradient" style={{ marginTop: '0.4rem', width: '100%' }}>
-                    <Save size={16} /> Salvar Gabarito do Leilão
-                  </button>
-                </div>
+          ) : (
+            <div style={{
+              height: '380px', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', background: 'rgba(15, 23, 42, 0.6)',
+              borderRadius: '8px', border: '2px dashed var(--border-subtle)', color: 'var(--text-muted)',
+              gap: '1rem', padding: '2rem', textAlign: 'center'
+            }}>
+              <Camera size={48} style={{ opacity: 0.3 }} />
+              <div>
+                <p style={{ fontWeight: 700, color: '#f8fafc', marginBottom: '0.25rem' }}>Nenhum frame carregado</p>
+                <p style={{ fontSize: '0.85rem' }}>Clique em <strong>"Extrair Frame do YouTube"</strong> ou <strong>"Enviar Print"</strong> para visualizar a tela e desenhar as caixas.</p>
               </div>
             </div>
+          )}
+        </div>
 
-            {/* CARD COM RESULTADOS DO OCR */}
-            {ocrResults && (
-              <div className="glass-panel" style={{ padding: '1.25rem', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#10b981', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Sparkles size={16} /> Resultado da Leitura OCR
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {Object.entries(ocrResults).map(([key, val]) => (
-                    <div key={key} style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      background: 'rgba(15, 23, 42, 0.6)', padding: '0.5rem 0.75rem', borderRadius: '6px'
-                    }}>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key}:</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#a7f3d0' }}>
-                        {val || '---'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+        {/* PAINEL LATERAL DE GERENCIAMENTO DOS CAMPOS */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="glass-panel" style={{ padding: '1.25rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <h4 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '1rem' }}>
+              📋 Campos Mapeados ({fields.length})
+            </h4>
+
+            {fields.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '1.5rem 1rem', color: 'var(--text-dim)', fontSize: '0.875rem' }}>
+                <AlertCircle size={28} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
+                <p>Nenhum campo selecionado.</p>
+                <p style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>Use os botões de atalho acima ou arraste na imagem.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '280px', overflowY: 'auto' }}>
+                {fields.map((field, idx) => (
+                  <div key={idx} style={{
+                    background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-subtle)',
+                    padding: '0.65rem 0.75rem', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '0.5rem'
+                  }}>
+                    <input 
+                      type="text" className="glass-input" 
+                      value={field.nome}
+                      onChange={(e) => {
+                        const updated = [...fields];
+                        updated[idx].nome = e.target.value;
+                        setFields(updated);
+                      }}
+                      style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }}
+                    />
+                    <button 
+                      onClick={() => handleDeleteField(idx)}
+                      style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: '0.2rem' }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
+            {/* AÇÕES DE TESTE E SALVAMENTO */}
+            <div style={{ marginTop: 'auto', paddingTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <button 
+                onClick={handleTestOCR} 
+                disabled={testingOcr || fields.length === 0} 
+                className="btn-gradient" 
+                style={{ width: '100%', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' }}
+              >
+                <Sparkles size={18} />
+                {testingOcr ? 'Lendo com OCR...' : 'Testar OCR nos Campos'}
+              </button>
+
+              <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                    Nome do Gabarito / Canal:
+                  </label>
+                  <input 
+                    type="text" className="glass-input" 
+                    placeholder="Ex: Leiloboi Nelore"
+                    value={channelName} onChange={(e) => setChannelName(e.target.value)}
+                  />
+                </div>
+
+                <button onClick={handleSaveTemplate} className="btn-gradient" style={{ marginTop: '0.4rem', width: '100%' }}>
+                  <Save size={16} /> Salvar Gabarito do Leilão
+                </button>
+              </div>
+            </div>
           </div>
 
+          {/* CARD COM RESULTADOS DO OCR */}
+          {ocrResults && (
+            <div className="glass-panel" style={{ padding: '1.25rem', borderColor: 'rgba(16, 185, 129, 0.4)' }}>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: '#10b981', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Sparkles size={16} /> Resultado da Leitura OCR
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {Object.entries(ocrResults).map(([key, val]) => (
+                  <div key={key} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    background: 'rgba(15, 23, 42, 0.6)', padding: '0.5rem 0.75rem', borderRadius: '6px'
+                  }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{key}:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#a7f3d0' }}>
+                      {val || '---'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
         </div>
-      )}
+      </div>
     </div>
   );
 }

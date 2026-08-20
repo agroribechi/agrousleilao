@@ -26,10 +26,11 @@ const PRESET_CATEGORIES = [
 // Extrai o videoId do YouTube de qualquer formato de URL
 const extractYouTubeVideoId = (urlStr) => {
   if (!urlStr) return null;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|live\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = urlStr.trim().match(regExp);
-  if (match && match[2] && match[2].length === 11) return match[2];
-  if (urlStr.trim().length === 11) return urlStr.trim();
+  const str = urlStr.trim();
+  const regExp = /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|live\/))([^#&?\n]+)/;
+  const match = str.match(regExp);
+  if (match && match[1]) return match[1];
+  if (str.length === 11 && !str.includes('/') && !str.includes('.')) return str;
   return null;
 };
 
@@ -1543,11 +1544,64 @@ Retorne um JSON com os campos:
       <div className="glass-panel" style={{ padding: '0.6rem 1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
           
-          {/* NOME DA LEILOEIRA & BADGE COMPACTO DE ALERTAS ATIVOS */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* NOME DA LEILOEIRA & SELETOR DE LEILÕES */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              🐂 {selectedTemplateName || 'Leilão'}
+              🐂 {selectedTemplateName || 'Leilão Ao Vivo'}
             </span>
+
+            {/* SELETOR DE LEILÕES CADASTRADOS */}
+            {auctions && auctions.length > 0 && (
+              <select
+                onChange={(e) => {
+                  const aucId = e.target.value;
+                  if (!aucId) return;
+                  const foundAuc = auctions.find(a => String(a.id) === String(aucId));
+                  if (foundAuc) {
+                    setSelectedTemplateName(foundAuc.title);
+                    if (foundAuc.website_url) {
+                      setVideoUrl(foundAuc.website_url);
+                      videoUrlRef.current = foundAuc.website_url;
+                    }
+                    // Se tiver template vinculado
+                    if (foundAuc.template_id) {
+                      const foundT = templates.find(t => t.id === foundAuc.template_id);
+                      if (foundT?.video_url && !foundAuc.website_url) {
+                        setVideoUrl(foundT.video_url);
+                        videoUrlRef.current = foundT.video_url;
+                      }
+                    }
+                    showToast(`🐂 Leilão '${foundAuc.title}' carregado na sala!`);
+                  }
+                }}
+                className="glass-input"
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', width: '180px' }}
+              >
+                <option value="" style={{ background: '#0f172a' }}>📋 Trocar Leilão...</option>
+                {auctions.map(a => (
+                  <option key={a.id} value={String(a.id)} style={{ background: '#0f172a' }}>
+                    {a.status === 'Ao Vivo' ? '🔴' : '🐂'} {a.title}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* SELETOR DE GABARITOS */}
+            {templates && templates.length > 0 && (
+              <select
+                value={selectedTemplateName}
+                onChange={(e) => handleSelectTemplate(e.target.value)}
+                className="glass-input"
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', width: '160px' }}
+              >
+                <option value="" style={{ background: '#0f172a' }}>📂 Gabarito...</option>
+                {templates.map(t => (
+                  <option key={t.id || t.name} value={t.name} style={{ background: '#0f172a' }}>
+                    📐 {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
 
             {activeCategories.length > 0 && (
               <span 
@@ -1825,13 +1879,28 @@ Retorne um JSON com os campos:
               />
             )}
 
-            {/* 2. YouTube IFrame Player API */}
+            {/* 2. YouTube IFrame Player (Conexão Direta e Confiável) */}
             {streamType === 'youtube' && (
               <div style={{
                 position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                display: (viewMode === 'player' && currentVideoId) ? 'block' : 'none'
+                display: (viewMode === 'player') ? 'block' : 'none'
               }}>
-                <div id="yt-player-container" style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }} />
+                {currentVideoId ? (
+                  <iframe
+                    key={currentVideoId}
+                    src={`https://www.youtube.com/embed/${currentVideoId}?autoplay=1&mute=1&enablejsapi=1&rel=0`}
+                    title="Transmissão do Leilão"
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 0 }}
+                  />
+                ) : (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', gap: '0.5rem', background: '#0f172a' }}>
+                    <Tv size={40} style={{ opacity: 0.4 }} />
+                    <span>Cole o link do YouTube ou escolha um leilão acima</span>
+                  </div>
+                )}
               </div>
             )}
 

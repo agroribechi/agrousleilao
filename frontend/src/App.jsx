@@ -341,6 +341,7 @@ export default function App() {
             API_BASE={API_BASE} 
             user={user} 
             templates={templates}
+            auctions={auctions}
             initialTemplate={selectedTemplateForEdit}
             onTemplateSaved={() => { fetchTemplates(); fetchAuctions(); }} 
           />
